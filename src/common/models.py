@@ -128,6 +128,7 @@ class FarmerSession(BaseModel):
     acres: float | None = Field(default=None, gt=0.0, description="Total farm acreage")
     sowing_deadline: date | None = Field(default=None, description="Target wheat sowing deadline")
     last_options: list[dict[str, Any]] | None = Field(default=None, description="Cached evaluated residue options")
+    history: list[dict[str, Any]] = Field(default_factory=list, description="Recent conversation turns (messages)")
     updated_at: datetime = Field(default_factory=_utc_now, description="Last session update timestamp")
 
 
