@@ -21,6 +21,14 @@ from typing import Any
 # Ensure project root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+if sys.stdout.encoding != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -117,15 +125,28 @@ def load_and_validate_buyers(
 
 
 def seed_database(
-    seed_dir: Path | str, db_mode: str = "local"
+    seed_dir: Path | str | DatabaseClient | None = None,
+    db_mode: str | None = None,
+    db: DatabaseClient | None = None,
 ) -> dict[str, SeedValidationReport]:
     """Validates and loads all seed files into the specified database."""
-    base_dir = Path(seed_dir)
-    db = get_db_client(mode=db_mode)
+    default_seed_dir = Path(__file__).resolve().parents[1] / "data" / "seed"
+    if isinstance(seed_dir, DatabaseClient):
+        db = seed_dir
+        base_dir = default_seed_dir
+    elif seed_dir is not None:
+        base_dir = Path(seed_dir)
+    else:
+        base_dir = default_seed_dir
+
+    if db is None:
+        resolved_mode = db_mode or os.getenv("DB_MODE", "local")
+        db = get_db_client(mode=resolved_mode)
+
     reports: dict[str, SeedValidationReport] = {}
 
     print("\n=======================================================")
-    print(f"[SEED] PARALI MITRA DATA INGESTION (Mode: {db_mode.upper()})")
+    print(f"[SEED] PARALI MITRA DATA INGESTION")
     print("=======================================================")
     print(f"Source directory: {base_dir.resolve()}\n")
 

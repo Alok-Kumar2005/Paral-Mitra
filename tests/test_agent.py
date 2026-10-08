@@ -235,3 +235,48 @@ def test_create_parali_agent_initialization(clean_database, monkeypatch):
     assert "find_residue_options" in captured["tool_names"]
     assert "nearby_fire_activity" in captured["tool_names"]
     assert "create_booking_request" in captured["tool_names"]
+
+
+# ── Location Slot Updating & Ex-Situ Intent Tests ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_parse_and_save_details_location_update(clean_database, monkeypatch):
+    """Verifies that new location in subsequent messages updates previous location slot."""
+    from src.agent.agent import _parse_and_save_details
+    from src.connectors.geocode import GeocodeResult
+
+    async def fake_geocode(self, query):
+        if "Samrala" in query:
+            return GeocodeResult(lat=30.8385, lon=76.1912, display_name="Samrala, Ludhiana, Punjab")
+        return GeocodeResult(lat=30.3400, lon=76.3800, display_name="Patiala, Punjab")
+
+    monkeypatch.setattr("src.connectors.geocode.Geocoder.geocode", fake_geocode)
+
+    chat_id = 99901
+    # 1. First message sets Patiala
+    session1 = await _parse_and_save_details(chat_id, "10 acres in Patiala, sowing in 12 days", clean_database)
+    assert session1.acres == 10.0
+    assert session1.lat == 30.3400
+    assert "Patiala" in session1.village_text
+
+    # 2. Second message updates location to Samrala
+    session2 = await _parse_and_save_details(chat_id, "Actually I have 15 acres in Samrala, Ludhiana", clean_database)
+    assert session2.acres == 15.0
+    assert session2.lat == 30.8385
+    assert session2.lon == 76.1912
+    assert "Samrala" in session2.village_text
+
+
+def test_ex_situ_intent_detection():
+    """Verifies intent recognition for straw selling and commercial biomass buyers."""
+    from src.agent.agent import _is_ex_situ_intent
+
+    assert _is_ex_situ_intent("I want to sell my paddy straw") is True
+    assert _is_ex_situ_intent("Can I sell straw to CBG plant?") is True
+    assert _is_ex_situ_intent("Show me biomass buyers nearby") is True
+    assert _is_ex_situ_intent("Ex-situ baling options") is True
+    assert _is_ex_situ_intent("पराली बेचना चाहता हूँ") is True
+    assert _is_ex_situ_intent("ਪਰਾਲੀ ਵੇਚਣੀ ਹੈ") is True
+    assert _is_ex_situ_intent("Super seeder machine rental") is False
+

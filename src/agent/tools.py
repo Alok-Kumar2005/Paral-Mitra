@@ -53,7 +53,7 @@ def _ensure_db_seeded(db: DatabaseClient) -> None:
     """Ensures database has machinery and buyer registries populated."""
     if len(db.list_machines()) == 0 or len(db.list_buyers()) == 0:
         if SEED_DIR.exists():
-            seed_database(seed_dir=SEED_DIR, db_mode="local")
+            seed_database(seed_dir=SEED_DIR, db=db)
 
 
 def _parse_date_input(val: str | None) -> date | None:

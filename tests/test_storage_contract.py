@@ -88,7 +88,7 @@ def db(request: pytest.FixtureRequest) -> DatabaseClient:  # type: ignore[return
     os.environ["DATABASE_URL"] = (
         test_url
         if "options=" in test_url
-        else test_url + f"&options=-c search_path%3D{schema}"
+        else test_url + f"&options=-c%20search_path%3D{schema}"
     )
 
     from src.common.db import PostgresClient

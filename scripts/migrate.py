@@ -17,6 +17,13 @@ from pathlib import Path
 # Allow running from any working directory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+if sys.stdout.encoding != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import os
 from dotenv import load_dotenv
 
@@ -27,12 +34,11 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "db" / "migrations"
 
 
 def _get_direct_dsn() -> str:
-    dsn = os.getenv("DATABASE_URL_DIRECT", "").strip()
+    dsn = os.getenv("DATABASE_URL_DIRECT", "").strip() or os.getenv("DATABASE_URL", "").strip()
     if not dsn:
         print(
-            "\n❌  DATABASE_URL_DIRECT is not set.\n"
-            "    This must be the non-pooled Neon connection string (for DDL).\n"
-            "    Set it in your .env file.\n"
+            "\n❌  DATABASE_URL / DATABASE_URL_DIRECT is not set.\n"
+            "    Set DATABASE_URL in your .env file.\n"
         )
         sys.exit(1)
     return dsn

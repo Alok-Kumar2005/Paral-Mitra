@@ -23,6 +23,10 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from src.common.models import (
     Booking,
     BookingStatus,
@@ -567,9 +571,16 @@ class PostgresClient(DatabaseClient):
             "conninfo": self._dsn,
             "connect_timeout": 10,
             "sslmode": "require",
-            "options": "-c statement_timeout=30000",
             "autocommit": False,
         }
+        try:
+            parsed_opts = psycopg.conninfo.conninfo_to_dict(self._dsn)
+            existing_opts = parsed_opts.get("options", "")
+            if "statement_timeout" not in existing_opts:
+                connect_kwargs["options"] = f"{existing_opts} -c statement_timeout=30000".strip()
+        except Exception:
+            connect_kwargs["options"] = "-c statement_timeout=30000"
+
         return psycopg.connect(**connect_kwargs)
 
     def _get_conn(self) -> Any:
@@ -657,27 +668,25 @@ class PostgresClient(DatabaseClient):
 
     def get_session(self, chat_id: int) -> FarmerSession | None:
         conn = self._get_conn()
-        row = conn.execute(
+        cur = conn.execute(
             "SELECT * FROM farmers WHERE chat_id = %s",
             (str(chat_id),),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         if not row:
             return None
-        # Touch last_seen_at
-        conn.execute(
-            "UPDATE farmers SET last_seen_at = now() WHERE chat_id = %s",
-            (str(chat_id),),
-        )
-        conn.commit()
-        d = dict(zip([col.name for col in conn.description], row)) if False else {}
-        # Re-fetch using cursor description from the SELECT
-        cur = conn.execute("SELECT * FROM farmers WHERE chat_id = %s", (str(chat_id),))
         cols = [desc.name for desc in cur.description]
-        row2 = cur.fetchone()
-        if not row2:
-            return None
-        d = dict(zip(cols, row2))
-        return _farmer_from_row(d)
+        d = dict(zip(cols, row))
+        session = _farmer_from_row(d)
+        try:
+            msgs = self.load_chat_messages(chat_id=chat_id, limit=20)
+            session.history = [
+                {"role": m.role, "content": [{"type": "text", "text": m.text}]}
+                for m in msgs
+            ]
+        except Exception:
+            pass
+        return session
 
     def forget_farmer(self, chat_id: int) -> None:
         conn = self._get_conn()

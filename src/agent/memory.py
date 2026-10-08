@@ -1,13 +1,11 @@
-"""Session memory and conversation turn persistence for Parali Mitra agent."""
-
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 
 from src.common.db import DatabaseClient, get_db
-from src.common.models import FarmerSession
+from src.common.models import ChatMessage, FarmerSession
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +29,10 @@ def load_session_history(
     """
     client = db or get_db()
     session = client.get_session(chat_id)
-    if not session or not session.history:
-        return []
-    return session.history[-max_messages:]
+    if session is not None and session.history is not None:
+        return session.history[-max_messages:]
+
+    return []
 
 
 def save_session_history(
@@ -62,6 +61,33 @@ def save_session_history(
     session.history = messages[-max_messages:]
     session.updated_at = datetime.now()
     client.put_session(session)
+
+    # Persist last turn into chat_messages table if supported
+    try:
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(days=7)
+        for msg in messages[-2:]:
+            role = msg.get("role")
+            if role in ("user", "assistant"):
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    text = "".join(
+                        part.get("text", "") for part in content if isinstance(part, dict)
+                    )
+                else:
+                    text = str(content)
+                if text.strip():
+                    client.append_chat_message(
+                        ChatMessage(
+                            chat_id=chat_id,
+                            role=role,
+                            text=text,
+                            expires_at=expires,
+                        )
+                    )
+    except Exception as exc:
+        logger.debug("Could not append chat message to database: %s", exc)
+
     return session
 
 
@@ -74,3 +100,7 @@ def clear_session_history(chat_id: int, db: DatabaseClient | None = None) -> Non
         session.last_options = None
         session.updated_at = datetime.now()
         client.put_session(session)
+
+    if hasattr(client, "_chat_messages") and isinstance(client._chat_messages, list):
+        client._chat_messages = [m for m in client._chat_messages if m.get("chat_id") != chat_id]
+
