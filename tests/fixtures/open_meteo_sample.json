@@ -1,0 +1,32 @@
+{
+  "latitude": 30.3,
+  "longitude": 75.8,
+  "generationtime_ms": 0.12,
+  "utc_offset_seconds": 19800,
+  "timezone": "Asia/Kolkata",
+  "timezone_abbreviation": "IST",
+  "elevation": 240.0,
+  "daily_units": {
+    "time": "iso8601",
+    "precipitation_sum": "mm",
+    "precipitation_probability_max": "%",
+    "wind_speed_10m_max": "km/h"
+  },
+  "daily": {
+    "time": [
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-10",
+      "2026-10-11",
+      "2026-10-12",
+      "2026-10-13",
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16",
+      "2026-10-17"
+    ],
+    "precipitation_sum": [0.0, 0.0, 5.2, 0.0, 0.0, 1.1, 0.0, 0.0, 0.0, 0.0],
+    "precipitation_probability_max": [5, 10, 80, 15, 0, 45, 10, 0, 5, 0],
+    "wind_speed_10m_max": [12.5, 14.2, 22.0, 11.8, 9.5, 15.3, 10.1, 8.4, 12.0, 11.2]
+  }
+}

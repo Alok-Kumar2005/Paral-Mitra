@@ -1,0 +1,13 @@
+machine_id,owner_name,owner_phone,owner_telegram_chat_id,machine_type,village,district,lat,lon,rate_per_acre,travel_charge_per_km,service_radius_km,available_from,blocked_dates,source,is_synthetic
+MCH_001,Dev Machinery CHC (Inderjeet Singh),+919876902425,,SUPER_SEEDER,Village Kaind SH 11,Ludhiana,30.8214,75.8942,2200.0,300.0,15.0,2026-10-08,,CHC_OWNER_CALL,False
+MCH_002,Gurbaz Farm Machinery (Jagtar Singh),+919465733000,,BALER,Village Amampura,Patiala,30.3398,76.3869,1800.0,250.0,20.0,2026-10-08,,CHC_OWNER_CALL,False
+MCH_003,New Vishavkarma Agro (Gurtej Singh),+917696287672,,MULCHER_CHOPPER,Sangrur Road Dirba,Sangrur,30.0638,75.9863,1500.0,200.0,12.0,2026-10-08,,AGRO_DEALER_CHC,False
+MCH_004,HS Agriculture CHC (Sukhwinder Singh),+918872728013,,HAPPY_SEEDER,Ladda to Kattu Balian,Sangrur,30.2458,75.8421,2000.0,250.0,15.0,2026-10-08,,CHC_REGISTRY,False
+MCH_005,Sohal Welding & Agro Works,+919876163609,,ROTAVATOR,Tilak Nagar Bhopa Rd,Muzaffarnagar,29.4727,77.7085,1400.0,150.0,10.0,2026-10-08,,AGRO_OPERATOR,False
+MCH_006,Isher Engineering (Rajendra Pal),+918630287830,,SUPER_SEEDER,Punjabi Pura,Meerut,28.9845,77.7064,2300.0,300.0,18.0,2026-10-08,,CHC_UNIT,False
+MCH_007,Apogee Agrotech CHC,+919760150033,,BALER,Agarsain Vihar Garh Rd,Hapur,28.7306,77.7758,1700.0,200.0,25.0,2026-10-08,,CHC_OPERATOR,False
+MCH_008,Karnal Agri Solutions (Rajnish Kumar),+919873519940,,HAPPY_SEEDER,HSIIDC Sector 3,Karnal,29.6857,76.9905,2100.0,250.0,15.0,2026-10-08,,CHC_OPERATOR,False
+MCH_009,Vishavjeet Farm Services,+917502721000,,SUPER_SEEDER,Mahavir Colony Hisar Rd,Sirsa,29.5330,75.0297,2200.0,300.0,20.0,2026-10-08,,CUSTOM_HIRING_HUB,False
+MCH_010,Maakar Spray Boom (Guranditta Singh),+919468124423,,MULCHER_CHOPPER,Village Doomwali,Bathinda,30.1322,74.8872,1600.0,200.0,15.0,2026-10-08,,CHC_BATHINDA,False
+MCH_011,KVK Karnal Custom Hiring Hub,+911842267800,,HAPPY_SEEDER,Village Uchani,Karnal,29.7312,76.9821,1800.0,200.0,30.0,2026-10-08,,KVK_CHC_GOVT,False
+MCH_012,KVK Patiala Machinery Bank,+911752215400,,SUPER_SEEDER,Rauni Farm,Patiala,30.3150,76.4120,1900.0,200.0,25.0,2026-10-08,,KVK_CHC_GOVT,False

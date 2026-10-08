@@ -1,0 +1,14 @@
+key,value,unit,description
+residue_tonnes_per_acre,2.8,tonnes/acre,Estimated paddy straw biomass generation per acre in Punjab and Haryana
+diesel_cost_per_litre,90.0,INR/litre,Benchmark retail diesel cost for machinery operations
+burning_fine_under_2_acres,2500.0,INR,NGT environmental compensation fine for farms under 2 acres
+burning_fine_2_to_5_acres,5000.0,INR,NGT environmental compensation fine for farms between 2 and 5 acres
+burning_fine_above_5_acres,15000.0,INR,NGT environmental compensation fine for farms exceeding 5 acres
+govt_ex_situ_incentive_per_acre,1000.0,INR/acre,Government cash incentive under CRM scheme for non-burning ex-situ management
+baling_cost_per_acre,1600.0,INR/acre,Contract baling, raking, and knotting cost per acre
+baling_speed_acres_per_hour,1.2,acres/hour,Average processing throughput of tractor-operated round/square baler
+super_seeder_speed_acres_per_hour,1.0,acres/hour,Average operating throughput for Super Seeder (simultaneous tilling and sowing)
+happy_seeder_speed_acres_per_hour,0.85,acres/hour,Average operating throughput for Happy Seeder in standing stubble
+mulcher_speed_acres_per_hour,1.5,acres/hour,Average operating throughput for Paddy Straw Chopper/Mulcher
+max_search_radius_km,50.0,km,Maximum radial distance to search for available machines and buyers
+default_transport_cost_per_tonne_km,8.0,INR/tonne-km,Benchmark road transport cost for biomass hauling

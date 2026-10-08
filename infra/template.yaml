@@ -1,0 +1,29 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Parali Mitra - Serverless Crop Residue Management Assistant (AWS Hackathon)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.12
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        AWS_REGION_NAME: !Ref AWS::Region
+        POWERTOOLS_SERVICE_NAME: parali-mitra
+
+Resources:
+  # Placeholder for SAM resources: API Gateway, Lambdas, SQS, DynamoDB, EventBridge
+  TelegramWebhookApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Description: Telegram Webhook API Gateway
+
+Outputs:
+  WebhookApiUrl:
+    Description: "API Gateway endpoint URL for Telegram webhook"
+    Value: !Sub "https://${TelegramWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"

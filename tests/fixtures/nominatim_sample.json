@@ -1,0 +1,27 @@
+[
+  {
+    "place_id": 123456,
+    "licence": "Data © OpenStreetMap contributors, ODbL 1.0. http://osm.org/copyright",
+    "osm_type": "node",
+    "osm_id": 987654321,
+    "lat": "30.3752",
+    "lon": "76.1471",
+    "category": "place",
+    "type": "town",
+    "place_rank": 16,
+    "importance": 0.52,
+    "addresstype": "town",
+    "name": "Nabha",
+    "display_name": "Nabha, Patiala, Punjab, 147201, India",
+    "address": {
+      "town": "Nabha",
+      "county": "Nabha",
+      "state_district": "Patiala",
+      "state": "Punjab",
+      "postcode": "147201",
+      "country": "India",
+      "country_code": "in"
+    },
+    "boundingbox": ["30.3552", "30.3952", "76.1271", "76.1671"]
+  }
+]
