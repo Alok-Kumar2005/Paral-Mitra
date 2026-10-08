@@ -16,7 +16,9 @@ Globals:
         POWERTOOLS_SERVICE_NAME: parali-mitra
 
 Resources:
-  # Placeholder for SAM resources: API Gateway, Lambdas, SQS, DynamoDB, EventBridge
+  # Resources: API Gateway (HTTP), Lambda (arm64), SQS, EventBridge Scheduler
+  # Database: Neon Postgres (external to AWS, accessed via DATABASE_URL from SSM /parali/database_url)
+  # Lambda execution role must have ssm:GetParameter on /parali/* and s3:PutObject/GetObject on S3_MEMORY_BUCKET
   TelegramWebhookApi:
     Type: AWS::Serverless::Api
     Properties:

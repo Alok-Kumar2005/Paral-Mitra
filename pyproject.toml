@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "boto3>=1.35.0",
+    "psycopg[binary]>=3.1",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
     "python-dotenv>=1.0.1",
@@ -29,8 +30,12 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 asyncio_mode = "auto"
+markers = [
+    "aws: tests requiring real AWS credentials (Bedrock, SSM, S3)",
+    "pg: tests requiring a live Postgres database (TEST_DATABASE_URL)",
+]
 
 [tool.ruff]
 line-length = 100

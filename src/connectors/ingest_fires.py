@@ -1,7 +1,8 @@
 """Ingestion service for active fire detections from NASA FIRMS.
 
-Fetches real-time hotspot records, assigns 10-day TTL expiry, and persists them into
-the database (DynamoDB or local InMemoryDatabase) for spatial gap analysis and monitoring.
+Fetches real-time hotspot records, assigns an expires_at datetime, and persists them
+into the database for spatial gap analysis and monitoring.
+Expired rows are pruned by prune_expired() called from the scheduler Lambda.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import time
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 from dotenv import load_dotenv
 
@@ -39,8 +40,8 @@ async def ingest_active_fires(
         source: VIIRS/MODIS sensor product.
         area_bbox: Bounding box (west, south, east, north).
         min_confidence: Minimum detection confidence threshold ("low", "nominal", "high").
-        ttl_days: DynamoDB TTL duration in days (default 10 days).
-        
+        ttl_days: Retention window in days before rows are pruned (default 10 days).
+
     Returns:
         Total number of active fire hotspots ingested and persisted.
     """
@@ -66,15 +67,18 @@ async def ingest_active_fires(
         logger.info("No active fire hotspots found matching criteria.")
         return 0
 
-    now_epoch = int(time.time())
-    ttl_epoch = now_epoch + (ttl_days * 86400)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
 
-    # Set 10-day TTL for every hotspot
+    # Stamp expires_at on every hotspot before persisting
     for h in hotspots:
-        h.ttl = ttl_epoch
+        object.__setattr__(h, "expires_at", expires_at)
 
     count = database.put_hotspots(hotspots)
-    logger.info("Successfully ingested %d active fire hotspots with TTL %d", count, ttl_epoch)
+    logger.info(
+        "Successfully ingested %d active fire hotspots (expires_at=%s)",
+        count,
+        expires_at.isoformat(),
+    )
     return count
 
 
@@ -84,7 +88,7 @@ async def main(args: Sequence[str] | None = None) -> None:
     parser.add_argument("--days", type=int, default=2, help="Days lookback (1-10, default 2)")
     parser.add_argument("--source", type=str, default=DEFAULT_VIIRS_SOURCE, help="VIIRS sensor source")
     parser.add_argument("--min-confidence", type=str, default="nominal", choices=["low", "nominal", "high"])
-    parser.add_argument("--ttl-days", type=int, default=10, help="DynamoDB TTL retention in days (default 10)")
+    parser.add_argument("--ttl-days", type=int, default=10, help="Retention window in days before hotspots are pruned (default 10)")
     parser.add_argument("--key", type=str, default=None, help="NASA FIRMS MAP_KEY")
     parsed = parser.parse_args(args)
 

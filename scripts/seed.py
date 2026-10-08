@@ -1,7 +1,12 @@
 """Seed data loader and validator for Parali Mitra.
 
 Validates all CSV seed files (constants, machines, buyers) against Pydantic models
-and loads them into DynamoDB or the local in-memory store, printing a comprehensive report.
+and loads them into Postgres or the local in-memory store with idempotent upserts,
+printing a comprehensive report.
+
+Usage:
+    python scripts/seed.py --mode local          # offline (default)
+    python scripts/seed.py --mode postgres       # Neon Postgres (requires DATABASE_URL)
 """
 
 from __future__ import annotations
@@ -16,10 +21,14 @@ from typing import Any
 # Ensure project root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from pydantic import ValidationError
 
 from src.common.constants import AgriculturalConstants, MissingConstantError
-from src.common.db import DatabaseClient, get_db
+from src.common.db import DatabaseClient, get_db_client
 from src.common.models import Buyer, Machine
 
 
@@ -46,7 +55,6 @@ def load_and_validate_machines(
         reader = csv.DictReader(f)
         for idx, row in enumerate(reader, start=2):
             report.total_rows += 1
-            # Clean empty string keys and handle boolean/numeric casting
             clean_row: dict[str, Any] = {
                 k.strip(): v.strip() for k, v in row.items() if k
             }
@@ -113,7 +121,7 @@ def seed_database(
 ) -> dict[str, SeedValidationReport]:
     """Validates and loads all seed files into the specified database."""
     base_dir = Path(seed_dir)
-    db = get_db(mode=db_mode)
+    db = get_db_client(mode=db_mode)
     reports: dict[str, SeedValidationReport] = {}
 
     print("\n=======================================================")
@@ -172,15 +180,26 @@ def main() -> None:
         help="Path to data/seed folder",
     )
     parser.add_argument(
-        "--db-mode",
+        "--mode",
         type=str,
         default="local",
-        choices=["local", "dynamodb"],
-        help="Database target mode",
+        choices=["local", "postgres", "neon"],
+        help="Database target mode: local (default), postgres, or neon",
+    )
+    # Legacy alias kept for backward compat with any existing scripts
+    parser.add_argument(
+        "--db-mode",
+        type=str,
+        default=None,
+        choices=["local", "postgres", "neon"],
+        help="Alias for --mode (deprecated)",
     )
     args = parser.parse_args()
 
-    reports = seed_database(seed_dir=args.seed_dir, db_mode=args.db_mode)
+    # --db-mode takes precedence if both given (backward compat)
+    mode = args.db_mode or args.mode
+
+    reports = seed_database(seed_dir=args.seed_dir, db_mode=mode)
     has_errors = any(r.rejected_rows > 0 for r in reports.values())
     if has_errors:
         sys.exit(1)

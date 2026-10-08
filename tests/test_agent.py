@@ -1,4 +1,9 @@
-"""Unit and integration tests for Parali Mitra Strands Agent layer."""
+"""Unit tests for Parali Mitra Strands Agent layer.
+
+All tests run fully offline (DB_MODE=local, no live Bedrock calls).
+The create_parali_agent() test monkeypatches strands.Agent to avoid
+AWS Bedrock client initialization.
+"""
 
 from datetime import date, timedelta
 import pytest
@@ -15,16 +20,19 @@ from src.agent import (
     save_farmer_details,
     save_session_history,
 )
-from src.common.db import get_db
-from src.common.models import BookingStatus, Hotspot
+from src.common.db import get_db_client
+from src.common.models import BookingStatus, FarmerSession, Hotspot
 
 
 @pytest.fixture(autouse=True)
 def clean_database():
     """Cleans in-memory database before each test."""
-    db = get_db("local")
+    db = get_db_client("local")
     db.clear_all()
     yield db
+
+
+# ── save_farmer_details ───────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -67,6 +75,9 @@ async def test_save_farmer_details_relative_days(clean_database):
     assert res["sowing_deadline"] == expected_date
 
 
+# ── find_residue_options ──────────────────────────────────────────────────────
+
+
 @pytest.mark.asyncio
 async def test_find_residue_options_missing_details(clean_database):
     chat_id = 33333
@@ -79,7 +90,7 @@ async def test_find_residue_options_missing_details(clean_database):
 @pytest.mark.asyncio
 async def test_find_residue_options_and_booking_flow(clean_database):
     chat_id = 44444
-    # 1. Save valid farmer details in Patiala close to KVK Patiala CHC (lat 30.3150, lon 76.4120)
+    # 1. Save valid farmer details near KVK Patiala CHC
     await save_farmer_details(
         chat_id=chat_id,
         acres=6.0,
@@ -119,6 +130,9 @@ async def test_find_residue_options_and_booking_flow(clean_database):
     assert booking.farmer_chat_id == chat_id
 
 
+# ── create_booking_request error paths ───────────────────────────────────────
+
+
 def test_create_booking_request_invalid_index(clean_database):
     chat_id = 55555
     res = create_booking_request(chat_id=chat_id, option_index=1)
@@ -126,16 +140,34 @@ def test_create_booking_request_invalid_index(clean_database):
     assert "No evaluated options found" in res["message"]
 
 
+# ── nearby_fire_activity ──────────────────────────────────────────────────────
+
+
 def test_nearby_fire_activity(clean_database):
     chat_id = 66666
-    # Add a farmer session
-    from src.common.models import FarmerSession
     session = FarmerSession(chat_id=chat_id, lat=30.3000, lon=76.4000)
     clean_database.put_session(session)
 
-    # Add hotspots
-    h1 = Hotspot(grid_cell="CELL_1", lat=30.3100, lon=76.4100, acq_date=date.today(), frp=25.0, confidence="high")
-    h2 = Hotspot(grid_cell="CELL_2", lat=28.5000, lon=77.2000, acq_date=date.today(), frp=50.0, confidence="nominal")
+    from datetime import datetime, timedelta, timezone
+    expires = datetime.now(timezone.utc) + timedelta(days=1)
+    h1 = Hotspot(
+        grid_cell="CELL_1",
+        lat=30.3100,
+        lon=76.4100,
+        acq_date=date.today(),
+        frp=25.0,
+        confidence="high",
+        expires_at=expires,
+    )
+    h2 = Hotspot(
+        grid_cell="CELL_2",
+        lat=28.5000,
+        lon=77.2000,
+        acq_date=date.today(),
+        frp=50.0,
+        confidence="nominal",
+        expires_at=expires,
+    )
     clean_database.put_hotspots([h1, h2])
 
     res = nearby_fire_activity(chat_id=chat_id, radius_km=20.0)
@@ -144,13 +176,14 @@ def test_nearby_fire_activity(clean_database):
     assert res["total_frp_mw"] == 25.0
 
 
+# ── Memory / session history shim ────────────────────────────────────────────
+
+
 def test_memory_session_history(clean_database):
     chat_id = 77777
-    # Initially empty
     hist = load_session_history(chat_id=chat_id)
     assert hist == []
 
-    # Save turns
     turns = [
         {"role": "user", "content": [{"text": "Hello"}]},
         {"role": "assistant", "content": [{"text": "Sat Sri Akal! How can I help you today?"}]},
@@ -161,9 +194,11 @@ def test_memory_session_history(clean_database):
     assert len(loaded) == 2
     assert loaded[0]["content"][0]["text"] == "Hello"
 
-    # Clear history
     clear_session_history(chat_id=chat_id)
     assert load_session_history(chat_id=chat_id) == []
+
+
+# ── Prompt integrity ──────────────────────────────────────────────────────────
 
 
 def test_system_prompt_integrity():
@@ -173,12 +208,30 @@ def test_system_prompt_integrity():
     assert "ZERO BURNING POLICY" in SYSTEM_PROMPT
 
 
-def test_create_parali_agent_initialization(clean_database):
+# ── Agent initialization (stubbed — no live Bedrock) ─────────────────────────
+
+
+def test_create_parali_agent_initialization(clean_database, monkeypatch):
+    """Verify agent structure without touching AWS Bedrock.
+
+    Monkeypatches strands.Agent.__init__ to record the tools list
+    without attempting a real Bedrock client instantiation.
+    """
+    captured: dict = {}
+
+    def _fake_agent_init(self, model=None, system_prompt=None, tools=None, messages=None, **kwargs):
+        captured["tool_names"] = [t.__name__ for t in (tools or [])]
+        captured["model"] = model
+        # Do NOT set self.tool_names — it's a read-only property on Agent
+        self.messages = messages or []
+
+    monkeypatch.setattr("strands.Agent.__init__", _fake_agent_init)
+
     chat_id = 88888
     agent = create_parali_agent(chat_id=chat_id, model="anthropic.claude-3-5-sonnet-20241022-v2:0")
     assert agent is not None
-    assert len(agent.tool_names) == 4
-    assert "save_farmer_details" in agent.tool_names
-    assert "find_residue_options" in agent.tool_names
-    assert "nearby_fire_activity" in agent.tool_names
-    assert "create_booking_request" in agent.tool_names
+    assert len(captured["tool_names"]) == 4
+    assert "save_farmer_details" in captured["tool_names"]
+    assert "find_residue_options" in captured["tool_names"]
+    assert "nearby_fire_activity" in captured["tool_names"]
+    assert "create_booking_request" in captured["tool_names"]
