@@ -1,0 +1,19 @@
+# Runtime dependencies for Parali Mitra AWS Lambda deployment.
+# This file is used by scripts/build_lambda.py to build the deployment package.
+# DO NOT add pytest, ruff, or other dev/test tools here.
+#
+# Install with cross-compilation flags for arm64 Lambda:
+#   pip install --platform manylinux2014_aarch64 \
+#               --implementation cp \
+#               --python-version 3.12 \
+#               --only-binary=:all: \
+#               --target build/lambda \
+#               -r requirements-lambda.txt
+
+httpx>=0.28.1
+boto3>=1.35.0
+strands-agents>=0.1.0
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+psycopg[binary]>=3.1
+python-dotenv>=1.0.1

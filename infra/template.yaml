@@ -1,31 +1,427 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Parali Mitra - Serverless Crop Residue Management Assistant (AWS Hackathon)
+  Parali Mitra — Serverless paddy straw residue advisor on Telegram.
+  Runtime: Python 3.12 / arm64 Lambda / ap-south-1.
+  Database: Neon PostgreSQL (external, accessed via DATABASE_URL env var).
+  No DynamoDB. No VPC. No ECR/containers.
+
+# ── Parameters ──────────────────────────────────────────────────────────────
+
+Parameters:
+
+  ModelId:
+    Type: String
+    Default: zai.glm-5.3
+    Description: >
+      Amazon Bedrock model ID. Use the full model ID for single-region access,
+      or a cross-region inference profile ID (e.g. us.anthropic.claude-3-5-sonnet-20241022-v2:0)
+      for automatic cross-region failover. The IAM policy covers both
+      foundation-model/* and inference-profile/* resource types.
+
+  BedrockRegion:
+    Type: String
+    Default: ap-south-1
+    Description: >
+      AWS region for Bedrock InvokeModel calls. Set to us-east-1 or us-west-2
+      if using cross-region inference profiles (the Lambda itself stays in
+      ap-south-1; only the Bedrock API call is routed cross-region).
+
+  SecretMode:
+    Type: String
+    Default: env
+    AllowedValues: [ssm, env]
+    Description: >
+      "env"  — secrets injected as Lambda environment variables from CloudFormation
+               NoEcho parameters. Simpler; use when SSM is SCP-blocked.
+      "ssm"  — secrets read at runtime from SSM Parameter Store /parali/*.
+               More secure; requires ssm:GetParameter permission.
+
+  TelegramBotToken:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: >
+      Telegram Bot API token (used only when SecretMode=env).
+      When SecretMode=ssm, set /parali/telegram_bot_token in SSM instead.
+
+  TelegramWebhookSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: >
+      Shared secret for webhook header x-telegram-bot-api-secret-token
+      (used only when SecretMode=env).
+
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: >
+      Neon PostgreSQL connection string, e.g.
+      postgresql://user:pass@host/db?sslmode=require
+      (used only when SecretMode=env; when SecretMode=ssm, store in
+      SSM /parali/database_url as a SecureString).
+
+  FirmsMapKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: >
+      NASA FIRMS MAP_KEY for VIIRS fire data ingestion
+      (used only when SecretMode=env).
+
+  WorkerReservedConcurrency:
+    Type: Number
+    Default: 0
+    Description: >
+      Reserved concurrency for the worker function. 0 = do NOT set a
+      reservation (default). New AWS accounts often have account-level
+      concurrency limits as low as 10-50; setting a reservation may cause
+      deployment to fail with TooManyRequestsException. Leave at 0 until
+      your account limit is confirmed via Service Quotas.
+
+  ExistingRoleArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of a pre-existing IAM role to use as the execution role for all
+      Lambda functions. If set, no IAM roles or policies are created by this
+      template (useful when iam:CreateRole is SCP-blocked). The role must
+      already have the required permissions. Leave empty to let SAM create
+      least-privilege roles automatically.
+
+# ── Conditions ───────────────────────────────────────────────────────────────
+
+Conditions:
+
+  UseSecretModeEnv: !Equals [!Ref SecretMode, env]
+  UseSecretModeSsm: !Equals [!Ref SecretMode, ssm]
+  CreateIamRoles: !Equals [!Ref ExistingRoleArn, ""]
+  CreateSsmPolicy: !And [!Equals [!Ref SecretMode, ssm], !Equals [!Ref ExistingRoleArn, ""]]
+  SetWorkerReservedConcurrency: !Not [!Equals [!Ref WorkerReservedConcurrency, 0]]
+
+# ── Globals ──────────────────────────────────────────────────────────────────
 
 Globals:
   Function:
-    Timeout: 30
-    MemorySize: 512
     Runtime: python3.12
     Architectures:
       - arm64
+    # Pre-built deployment package: run scripts/build_lambda.py first,
+    # then deploy with: sam deploy --no-build --template-file infra/template.yaml
+    # All three functions share one code directory.
+    CodeUri: ../build/lambda
+    Layers: []
     Environment:
       Variables:
-        AWS_REGION_NAME: !Ref AWS::Region
-        POWERTOOLS_SERVICE_NAME: parali-mitra
+        # ── Non-secret shared config ──────────────────────────────────────
+        MODEL_ID: !Ref ModelId
+        BEDROCK_REGION: !Ref BedrockRegion
+        DB_MODE: postgres
+        DB_ENV: prod
+        SECRET_MODE: !Ref SecretMode
+        S3_BUCKET_NAME: alok-ki-balti
+        # ── Injected secrets (only populated when SecretMode=env) ─────────
+        TELEGRAM_BOT_TOKEN: !If [UseSecretModeEnv, !Ref TelegramBotToken, ""]
+        TELEGRAM_WEBHOOK_SECRET: !If [UseSecretModeEnv, !Ref TelegramWebhookSecret, ""]
+        DATABASE_URL: !If [UseSecretModeEnv, !Ref DatabaseUrl, ""]
+        FIRMS_MAP_KEY: !If [UseSecretModeEnv, !Ref FirmsMapKey, ""]
+
+# ── Resources ────────────────────────────────────────────────────────────────
 
 Resources:
-  # Resources: API Gateway (HTTP), Lambda (arm64), SQS, EventBridge Scheduler
-  # Database: Neon Postgres (external to AWS, accessed via DATABASE_URL from SSM /parali/database_url)
-  # Lambda execution role must have ssm:GetParameter on /parali/* and s3:PutObject/GetObject on S3_MEMORY_BUCKET
-  TelegramWebhookApi:
-    Type: AWS::Serverless::Api
+
+  # ── SQS FIFO Queue + DLQ ─────────────────────────────────────────────────
+
+  UpdateDlq:
+    Type: AWS::SQS::Queue
     Properties:
-      StageName: Prod
-      Description: Telegram Webhook API Gateway
+      QueueName: parali-mitra-updates-dlq.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Project
+          Value: parali-mitra
+
+  UpdateQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: parali-mitra-updates.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      # VisibilityTimeout must be >= Lambda timeout (90s) to prevent
+      # duplicate processing during execution.
+      VisibilityTimeout: 120
+      MessageRetentionPeriod: 86400  # 1 day (messages should be processed fast)
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt UpdateDlq.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Project
+          Value: parali-mitra
+
+  # ── API Gateway (HTTP API) ────────────────────────────────────────────────
+
+  WebhookApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      Description: Parali Mitra Telegram webhook ingress (HTTP API payload v2)
+      Tags:
+        Project: parali-mitra
+
+  # ── IAM Roles (created only when ExistingRoleArn is empty) ───────────────
+
+  ReceiverRole:
+    Type: AWS::IAM::Role
+    Condition: CreateIamRoles
+    Properties:
+      RoleName: parali-mitra-receiver-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ReceiverSqsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SendToUpdateQueue
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt UpdateQueue.Arn
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Condition: CreateIamRoles
+    Properties:
+      RoleName: parali-mitra-worker-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: WorkerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SqsConsumeQueue
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt UpdateQueue.Arn
+
+              # Bedrock: allow InvokeModel on both foundation-model and
+              # inference-profile resource types for the configured region.
+              #
+              # Cross-region inference profiles (e.g. us.anthropic.claude-3-5-sonnet...)
+              # are identified with resource type "inference-profile", NOT "foundation-model".
+              # Both are included so the same policy works whether ModelId is a direct
+              # model ID or a cross-region inference profile ID.
+              - Sid: BedrockInvokeFoundationModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub arn:aws:bedrock:${BedrockRegion}::foundation-model/*
+                  - !Sub arn:aws:bedrock:${BedrockRegion}::inference-profile/*
+
+  IngestRole:
+    Type: AWS::IAM::Role
+    Condition: CreateIamRoles
+    Properties:
+      RoleName: parali-mitra-ingest-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  SsmAccessPolicy:
+    Type: AWS::IAM::Policy
+    Condition: CreateSsmPolicy
+    Properties:
+      PolicyName: parali-mitra-ssm-policy
+      Roles:
+        - !Ref WorkerRole
+        - !Ref IngestRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SsmReadParaliSecrets
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/parali/*
+
+  # ── Lambda Functions ──────────────────────────────────────────────────────
+
+  ReceiverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: parali-mitra-receiver
+      Handler: src.handlers.receiver.handler
+      Description: >
+        Telegram webhook ingress: verify secret, enqueue update to SQS FIFO.
+        POST /telegram/webhook and GET /health.
+      Timeout: 10
+      MemorySize: 256
+      Role: !If [CreateIamRoles, !GetAtt ReceiverRole.Arn, !Ref ExistingRoleArn]
+      Environment:
+        Variables:
+          UPDATE_QUEUE_URL: !Ref UpdateQueue
+      Events:
+        WebhookPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookApi
+            Path: /telegram/webhook
+            Method: POST
+        HealthGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookApi
+            Path: /health
+            Method: GET
+      Tags:
+        Project: parali-mitra
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: parali-mitra-worker
+      Handler: src.handlers.worker.handler
+      Description: >
+        SQS-triggered agent worker: runs Strands agent + Bedrock LLM per update.
+        Batch size 1 with ReportBatchItemFailures for reliable retry.
+      Timeout: 90
+      MemorySize: 1024
+      # ReservedConcurrentExecutions is only set when WorkerReservedConcurrency > 0.
+      # Default 0 = no reservation (safe for new accounts with low limits).
+      ReservedConcurrentExecutions: !If
+        - SetWorkerReservedConcurrency
+        - !Ref WorkerReservedConcurrency
+        - !Ref AWS::NoValue
+      Role: !If [CreateIamRoles, !GetAtt WorkerRole.Arn, !Ref ExistingRoleArn]
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt UpdateQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+      Tags:
+        Project: parali-mitra
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: parali-mitra-ingest
+      Handler: src.handlers.ingest.handler
+      Description: >
+        Scheduled handler: fetch NASA FIRMS fire hotspots and prune expired rows.
+        Runs every 3 hours via EventBridge Scheduler.
+      Timeout: 120
+      MemorySize: 512
+      Role: !If [CreateIamRoles, !GetAtt IngestRole.Arn, !Ref ExistingRoleArn]
+      Events:
+        ScheduledRun:
+          Type: Schedule
+          Properties:
+            Schedule: rate(3 hours)
+            Name: parali-mitra-ingest-schedule
+            Description: Trigger fire ingestion every 3 hours
+            Enabled: true
+      Tags:
+        Project: parali-mitra
+
+  # ── CloudWatch Log Groups (7-day retention) ───────────────────────────────
+
+  ReceiverLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ReceiverFunction}
+      RetentionInDays: 7
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${WorkerFunction}
+      RetentionInDays: 7
+
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${IngestFunction}
+      RetentionInDays: 7
+
+  # ── CloudWatch Alarm: DLQ depth ──────────────────────────────────────────
+
+  DlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: parali-mitra-dlq-depth
+      AlarmDescription: >
+        One or more Telegram updates have failed all 3 delivery attempts
+        and landed in the dead-letter queue. Investigate worker logs.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt UpdateDlq.QueueName
+      Statistic: Maximum
+      Period: 300   # 5 minutes
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+# ── Outputs ──────────────────────────────────────────────────────────────────
 
 Outputs:
-  WebhookApiUrl:
-    Description: "API Gateway endpoint URL for Telegram webhook"
-    Value: !Sub "https://${TelegramWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+
+  WebhookUrl:
+    Description: >
+      Set this URL in Telegram: POST to setWebhook (run scripts/set_webhook.py --url <this>)
+    Value: !Sub https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/telegram/webhook
+    Export:
+      Name: ParaliMitra-WebhookUrl
+
+  HealthUrl:
+    Description: Liveness probe endpoint
+    Value: !Sub https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/health
+    Export:
+      Name: ParaliMitra-HealthUrl
+
+  QueueUrl:
+    Description: SQS FIFO queue URL for Telegram updates
+    Value: !Ref UpdateQueue
+    Export:
+      Name: ParaliMitra-QueueUrl
+
+  DlqUrl:
+    Description: SQS FIFO dead-letter queue URL
+    Value: !Ref UpdateDlq
+    Export:
+      Name: ParaliMitra-DlqUrl

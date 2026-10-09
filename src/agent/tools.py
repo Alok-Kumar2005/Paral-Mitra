@@ -26,7 +26,6 @@ from src.connectors.geocode import Geocoder
 from src.connectors.weather import WeatherClient
 from src.engine.geo import haversine_distance
 from src.engine.recommender import rank_options
-from scripts.seed import seed_database
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +50,16 @@ def get_agricultural_constants() -> AgriculturalConstants:
 
 def _ensure_db_seeded(db: DatabaseClient) -> None:
     """Ensures database has machinery and buyer registries populated."""
-    if len(db.list_machines()) == 0 or len(db.list_buyers()) == 0:
-        if SEED_DIR.exists():
-            seed_database(seed_dir=SEED_DIR, db=db)
+    try:
+        if len(db.list_machines()) == 0 or len(db.list_buyers()) == 0:
+            if SEED_DIR.exists():
+                try:
+                    from scripts.seed import seed_database
+                    seed_database(seed_dir=SEED_DIR, db=db)
+                except ImportError:
+                    pass
+    except Exception as exc:
+        logger.warning("[DB] _ensure_db_seeded skipped: %s", exc)
 
 
 def _parse_date_input(val: str | None) -> date | None:

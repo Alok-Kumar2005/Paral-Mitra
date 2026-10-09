@@ -243,6 +243,7 @@ class TelegramClient:
 
         return results
 
+
     async def sendChatAction(
         self,
         chat_id: int | str,
@@ -352,3 +353,14 @@ class TelegramClient:
         except httpx.RequestError as exc:
             logger.error("getUpdates request error: %s", exc)
             raise TelegramApiError(500, f"getUpdates failed: {exc}") from exc
+
+    # ── Method aliases for snake_case and camelCase compatibility ───────────
+    send_message = sendMessage
+    send_chat_action = sendChatAction
+    answer_callback_query = answerCallbackQuery
+    get_file = getFile
+    download_file = downloadFile
+    set_webhook = setWebhook
+    delete_webhook = deleteWebhook
+    get_updates = getUpdates
+
