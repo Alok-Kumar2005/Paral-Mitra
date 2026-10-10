@@ -157,6 +157,9 @@ class Buyer(BaseModel):
     is_synthetic: bool = Field(default=False, description="Flag indicating synthetic test data")
 
 
+from dataclasses import dataclass
+
+
 # ── Bookings ──────────────────────────────────────────────────────────────────
 
 
@@ -164,7 +167,7 @@ class Booking(BaseModel):
     """A farmer's booking request for a machine or buyer dispatch."""
     model_config = ConfigDict(extra="forbid")
 
-    booking_id: str = Field(..., min_length=1, description="Unique booking ID (e.g. BKG_1001)")
+    booking_id: str = Field(..., min_length=1, description="Unique booking ID (e.g. BK-XXXXXXXX)")
     farmer_chat_id: int = Field(..., description="Telegram chat ID of the farmer")
     provider_id: str | None = Field(default=None, description="FK to providers table")
     option_type: OptionType | str = Field(..., description="IN_SITU or EX_SITU")
@@ -176,6 +179,54 @@ class Booking(BaseModel):
     created_at: datetime = Field(default_factory=_utc_now, description="Booking creation timestamp")
     updated_at: datetime = Field(default_factory=_utc_now, description="Last update timestamp")
     completed_at: datetime | None = Field(default=None, description="Completion timestamp")
+    expires_at: datetime | None = Field(default=None, description="Auto-expiry timestamp")
+    decided_at: datetime | None = Field(default=None, description="Timestamp of accept/reject decision")
+    decided_by: str | None = Field(default=None, description="Operator chat ID or system marker that decided")
+
+
+# ── Interactive Chat Flow ─────────────────────────────────────────────────────
+
+
+class ChatFlow(BaseModel):
+    """State machine for multi-step interactive flows (e.g. /owner registration)."""
+    model_config = ConfigDict(extra="forbid")
+
+    chat_id: int = Field(..., description="Telegram chat ID")
+    flow: str = Field(..., description="Flow identifier, e.g. OWNER_REGISTER, OWNER_ADD_MACHINE")
+    step: str = Field(..., description="Current step in the flow")
+    data: dict[str, Any] = Field(default_factory=dict, description="Collected step data")
+    attempts: int = Field(default=0, description="Passcode or retry attempts")
+    locked_until: datetime | None = Field(default=None, description="Lockout timestamp")
+    updated_at: datetime = Field(default_factory=_utc_now)
+
+
+# ── Public Views & Outbound Notifications ─────────────────────────────────────
+
+
+class PublicMachineView(BaseModel):
+    """Sanitized machine view for public farmer exploration without leaking sensitive owner info before booking."""
+    model_config = ConfigDict(extra="forbid")
+
+    machine_id: str
+    machine_type: MachineType | str
+    village: str
+    district: str
+    rate_per_acre: float
+    travel_charge_per_km: float
+    service_radius_km: float
+    rating_avg: float | None = None
+    rating_count: int = 0
+    provider_name: str
+    provider_status: ProviderStatus | str
+    distance_km: float | None = None
+
+
+@dataclass
+class Notification:
+    """Out-of-band notification message emitted by marketplace service functions."""
+    chat_id: int
+    text: str
+    reply_markup: dict[str, Any] | None = None
 
 
 # ── Farmer session ────────────────────────────────────────────────────────────

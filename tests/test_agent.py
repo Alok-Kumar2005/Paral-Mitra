@@ -119,8 +119,8 @@ async def test_find_residue_options_and_booking_flow(clean_database):
 
     # 3. Create booking request for option 1
     bkg_res = create_booking_request(chat_id=chat_id, option_index=1)
-    assert bkg_res["status"] == "CONFIRMED_PENDING"
-    assert bkg_res["booking_id"].startswith("BKG_")
+    assert bkg_res["status"] == "PENDING"
+    assert bkg_res["booking_id"].startswith("BK-")
     assert bkg_res["acres"] == 6.0
 
     # Verify booking in database
@@ -230,11 +230,12 @@ def test_create_parali_agent_initialization(clean_database, monkeypatch):
     chat_id = 88888
     agent = create_parali_agent(chat_id=chat_id, model="anthropic.claude-3-5-sonnet-20241022-v2:0")
     assert agent is not None
-    assert len(captured["tool_names"]) == 4
+    assert len(captured["tool_names"]) == 5
     assert "save_farmer_details" in captured["tool_names"]
     assert "find_residue_options" in captured["tool_names"]
     assert "nearby_fire_activity" in captured["tool_names"]
     assert "create_booking_request" in captured["tool_names"]
+    assert "list_nearby_machines" in captured["tool_names"]
 
 
 # ── Location Slot Updating & Ex-Situ Intent Tests ───────────────────────────

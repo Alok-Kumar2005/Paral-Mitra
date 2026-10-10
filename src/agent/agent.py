@@ -19,6 +19,7 @@ from src.agent.tools import (
     create_booking_request,
     find_residue_options,
     get_agricultural_constants,
+    list_nearby_machines,
     nearby_fire_activity,
     save_farmer_details,
 )
@@ -470,6 +471,7 @@ def get_agent_tools() -> list[Any]:
     return [
         save_farmer_details,
         find_residue_options,
+        list_nearby_machines,
         nearby_fire_activity,
         create_booking_request,
     ]

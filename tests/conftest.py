@@ -20,6 +20,8 @@ import os
 os.environ.setdefault("DB_MODE", "local")
 os.environ.setdefault("DATABASE_MODE", "local")
 os.environ.setdefault("DB_ENV", "test")  # allows clear_all() in tests
+os.environ.setdefault("OWNER_PASSCODE", "secretpass123")  # used by test_router_owner_command
+os.environ.setdefault("ADMIN_CHAT_IDS", "")  # empty = no real admins in unit tests
 
 import pytest
 

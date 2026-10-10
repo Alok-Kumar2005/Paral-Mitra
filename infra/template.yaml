@@ -257,6 +257,21 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
+  SweeperRole:
+    Type: AWS::IAM::Role
+    Condition: CreateIamRoles
+    Properties:
+      RoleName: parali-mitra-sweeper-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
   SsmAccessPolicy:
     Type: AWS::IAM::Policy
     Condition: CreateSsmPolicy
@@ -265,6 +280,7 @@ Resources:
       Roles:
         - !Ref WorkerRole
         - !Ref IngestRole
+        - !Ref SweeperRole
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -356,6 +372,28 @@ Resources:
       Tags:
         Project: parali-mitra
 
+  SweeperFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: parali-mitra-sweeper
+      Handler: src.handlers.sweeper.handler
+      Description: >
+        Scheduled handler: expire stale pending bookings (48h TTL) and prune database cache.
+        Runs every 15 minutes via EventBridge Scheduler.
+      Timeout: 60
+      MemorySize: 256
+      Role: !If [CreateIamRoles, !GetAtt SweeperRole.Arn, !Ref ExistingRoleArn]
+      Events:
+        ScheduledRun:
+          Type: Schedule
+          Properties:
+            Schedule: rate(15 minutes)
+            Name: parali-mitra-sweeper-schedule
+            Description: Trigger booking sweeper every 15 minutes
+            Enabled: true
+      Tags:
+        Project: parali-mitra
+
   # ── CloudWatch Log Groups (7-day retention) ───────────────────────────────
 
   ReceiverLogGroup:
@@ -374,6 +412,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${IngestFunction}
+      RetentionInDays: 7
+
+  SweeperLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${SweeperFunction}
       RetentionInDays: 7
 
   # ── CloudWatch Alarm: DLQ depth ──────────────────────────────────────────

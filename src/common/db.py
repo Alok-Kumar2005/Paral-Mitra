@@ -31,6 +31,7 @@ from src.common.models import (
     Booking,
     BookingStatus,
     Buyer,
+    ChatFlow,
     ChatMessage,
     ChatState,
     FarmerSession,
@@ -68,6 +69,17 @@ class DatabaseClient(ABC):
         """Delete farmer profile and all associated data (GDPR /forget_me)."""
         ...
 
+    # ── Interactive chat flows ────────────────────────────────────────────────
+
+    @abstractmethod
+    def get_chat_flow(self, chat_id: int) -> ChatFlow | None: ...
+
+    @abstractmethod
+    def put_chat_flow(self, flow: ChatFlow) -> None: ...
+
+    @abstractmethod
+    def delete_chat_flow(self, chat_id: int) -> None: ...
+
     # ── Conversation memory ───────────────────────────────────────────────────
 
     @abstractmethod
@@ -99,6 +111,12 @@ class DatabaseClient(ABC):
     def get_provider(self, provider_id: str) -> Provider | None: ...
 
     @abstractmethod
+    def get_provider_by_chat_id(self, telegram_chat_id: int | str) -> Provider | None: ...
+
+    @abstractmethod
+    def list_providers(self, status: ProviderStatus | None = None) -> list[Provider]: ...
+
+    @abstractmethod
     def update_provider_status(
         self,
         provider_id: str,
@@ -116,6 +134,19 @@ class DatabaseClient(ABC):
 
     @abstractmethod
     def list_machines(self, district: str | None = None) -> list[Machine]: ...
+
+    @abstractmethod
+    def list_machines_by_provider(self, provider_id: str) -> list[Machine]: ...
+
+    @abstractmethod
+    def list_bookable_machines(
+        self,
+        lat: float | None = None,
+        lon: float | None = None,
+        radius_km: float | None = None,
+    ) -> list[Machine]:
+        """Return ACTIVE machines whose providers are VERIFIED (or legacy directory)."""
+        ...
 
     @abstractmethod
     def list_machines_nearby(
@@ -138,6 +169,16 @@ class DatabaseClient(ABC):
     @abstractmethod
     def list_buyers(self) -> list[Buyer]: ...
 
+    @abstractmethod
+    def list_bookable_buyers(
+        self,
+        lat: float | None = None,
+        lon: float | None = None,
+        radius_km: float | None = None,
+    ) -> list[Buyer]:
+        """Return commercial buyers whose providers are VERIFIED (or legacy directory)."""
+        ...
+
     # ── Bookings ──────────────────────────────────────────────────────────────
 
     @abstractmethod
@@ -150,9 +191,38 @@ class DatabaseClient(ABC):
     def list_bookings_by_farmer(self, farmer_chat_id: int) -> list[Booking]: ...
 
     @abstractmethod
+    def list_bookings_by_provider(self, provider_id: str) -> list[Booking]: ...
+
+    @abstractmethod
+    def list_stale_pending_bookings(self, cutoff_utc: datetime) -> list[Booking]:
+        """Return PENDING bookings that have passed their expires_at (or 48h default)."""
+        ...
+
+    @abstractmethod
     def update_booking_status(
         self, booking_id: str, status: BookingStatus
     ) -> Booking | None: ...
+
+    @abstractmethod
+    def update_booking_status_if(
+        self,
+        booking_id: str,
+        expected_current_statuses: list[BookingStatus],
+        new_status: BookingStatus,
+        decided_by: str | None = None,
+        decided_at: datetime | None = None,
+    ) -> Booking | None:
+        """Atomic Compare-And-Swap status transition."""
+        ...
+
+    @abstractmethod
+    def add_booking_rating(
+        self,
+        booking_id: str,
+        rating: int,
+    ) -> Booking | None:
+        """Record farmer rating (1-5) and update target machine's average rating."""
+        ...
 
     # ── Hotspots ──────────────────────────────────────────────────────────────
 
@@ -232,6 +302,9 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 # ── In-memory backend ─────────────────────────────────────────────────────────
 
 
+# ── In-memory backend ─────────────────────────────────────────────────────────
+
+
 class InMemoryDatabase(DatabaseClient):
     """Local in-memory storage for tests and offline development.
 
@@ -243,6 +316,7 @@ class InMemoryDatabase(DatabaseClient):
         self._buyers: dict[str, dict[str, Any]] = {}
         self._bookings: dict[str, dict[str, Any]] = {}
         self._sessions: dict[int, dict[str, Any]] = {}
+        self._chat_flows: dict[int, dict[str, Any]] = {}
         self._hotspots: dict[str, dict[str, Any]] = {}
         self._processed_updates: dict[str, float] = {}  # update_id -> expiry epoch
         self._providers: dict[str, dict[str, Any]] = {}
@@ -258,6 +332,7 @@ class InMemoryDatabase(DatabaseClient):
         self._buyers.clear()
         self._bookings.clear()
         self._sessions.clear()
+        self._chat_flows.clear()
         self._hotspots.clear()
         self._processed_updates.clear()
         self._providers.clear()
@@ -278,8 +353,21 @@ class InMemoryDatabase(DatabaseClient):
     def forget_farmer(self, chat_id: int) -> None:
         self._sessions.pop(chat_id, None)
         self._chat_states.pop(chat_id, None)
+        self._chat_flows.pop(chat_id, None)
         self._chat_messages = [m for m in self._chat_messages if m.get("chat_id") != chat_id]
         # Bookings are kept for audit purposes (farmer_chat_id FK set to NULL in real DB)
+
+    # ── Interactive chat flows ────────────────────────────────────────────────
+
+    def get_chat_flow(self, chat_id: int) -> ChatFlow | None:
+        data = self._chat_flows.get(chat_id)
+        return ChatFlow.model_validate(data) if data else None
+
+    def put_chat_flow(self, flow: ChatFlow) -> None:
+        self._chat_flows[flow.chat_id] = flow.model_dump(mode="json")
+
+    def delete_chat_flow(self, chat_id: int) -> None:
+        self._chat_flows.pop(chat_id, None)
 
     # ── Conversation memory ───────────────────────────────────────────────────
 
@@ -316,6 +404,20 @@ class InMemoryDatabase(DatabaseClient):
         data = self._providers.get(provider_id)
         return Provider.model_validate(data) if data else None
 
+    def get_provider_by_chat_id(self, telegram_chat_id: int | str) -> Provider | None:
+        tid = str(telegram_chat_id)
+        for p_data in self._providers.values():
+            if str(p_data.get("telegram_chat_id") or "") == tid:
+                return Provider.model_validate(p_data)
+        return None
+
+    def list_providers(self, status: ProviderStatus | None = None) -> list[Provider]:
+        res = [Provider.model_validate(d) for d in self._providers.values()]
+        if status is not None:
+            val = status.value if hasattr(status, "value") else str(status)
+            res = [p for p in res if str(p.status.value if hasattr(p.status, "value") else p.status) == val]
+        return res
+
     def update_provider_status(
         self,
         provider_id: str,
@@ -349,22 +451,45 @@ class InMemoryDatabase(DatabaseClient):
             res = [m for m in res if m.district.strip().lower() == district.strip().lower()]
         return res
 
+    def list_machines_by_provider(self, provider_id: str) -> list[Machine]:
+        return [
+            Machine.model_validate(d)
+            for d in self._machines.values()
+            if d.get("provider_id") == provider_id
+        ]
+
+    def list_bookable_machines(
+        self,
+        lat: float | None = None,
+        lon: float | None = None,
+        radius_km: float | None = None,
+    ) -> list[Machine]:
+        """Return ACTIVE machines whose provider is VERIFIED (or legacy directory)."""
+        result: list[Machine] = []
+        for d in self._machines.values():
+            m = Machine.model_validate(d)
+            if m.status != "ACTIVE":
+                continue
+            if m.provider_id:
+                p_data = self._providers.get(m.provider_id)
+                if p_data:
+                    p_status = p_data.get("status")
+                    if p_status != ProviderStatus.VERIFIED.value and p_status != "VERIFIED":
+                        continue
+            if lat is not None and lon is not None and radius_km is not None:
+                if _haversine_km(lat, lon, m.lat, m.lon) > radius_km:
+                    continue
+            result.append(m)
+        return result
+
     def list_machines_nearby(
         self,
         lat: float,
         lon: float,
         radius_km: float = 50.0,
     ) -> list[Machine]:
-        """Return ACTIVE machines within radius_km. Provider VERIFIED check is advisory
-        in the in-memory backend (no provider table join required for tests)."""
-        result = []
-        for machine in self.list_machines():
-            if machine.status != "ACTIVE":
-                continue
-            dist = _haversine_km(lat, lon, machine.lat, machine.lon)
-            if dist <= radius_km:
-                result.append(machine)
-        return result
+        """Return ACTIVE machines within radius_km with verified providers."""
+        return self.list_bookable_machines(lat=lat, lon=lon, radius_km=radius_km)
 
     # ── Buyers ────────────────────────────────────────────────────────────────
 
@@ -377,6 +502,28 @@ class InMemoryDatabase(DatabaseClient):
 
     def list_buyers(self) -> list[Buyer]:
         return [Buyer.model_validate(d) for d in self._buyers.values()]
+
+    def list_bookable_buyers(
+        self,
+        lat: float | None = None,
+        lon: float | None = None,
+        radius_km: float | None = None,
+    ) -> list[Buyer]:
+        """Return commercial buyers whose provider is VERIFIED (or legacy directory)."""
+        result: list[Buyer] = []
+        for d in self._buyers.values():
+            b = Buyer.model_validate(d)
+            if b.provider_id:
+                p_data = self._providers.get(b.provider_id)
+                if p_data:
+                    p_status = p_data.get("status")
+                    if p_status != ProviderStatus.VERIFIED.value and p_status != "VERIFIED":
+                        continue
+            if lat is not None and lon is not None and radius_km is not None:
+                if _haversine_km(lat, lon, b.lat, b.lon) > radius_km:
+                    continue
+            result.append(b)
+        return result
 
     # ── Bookings ──────────────────────────────────────────────────────────────
 
@@ -394,6 +541,27 @@ class InMemoryDatabase(DatabaseClient):
             if d.get("farmer_chat_id") == farmer_chat_id
         ]
 
+    def list_bookings_by_provider(self, provider_id: str) -> list[Booking]:
+        return [
+            Booking.model_validate(d)
+            for d in self._bookings.values()
+            if d.get("provider_id") == provider_id
+        ]
+
+    def list_stale_pending_bookings(self, cutoff_utc: datetime) -> list[Booking]:
+        res: list[Booking] = []
+        for d in self._bookings.values():
+            b = Booking.model_validate(d)
+            if b.status != BookingStatus.PENDING:
+                continue
+            if b.expires_at is not None:
+                if b.expires_at <= cutoff_utc:
+                    res.append(b)
+            else:
+                if b.created_at <= (cutoff_utc - timedelta(hours=48)):
+                    res.append(b)
+        return sorted(res, key=lambda x: x.created_at)
+
     def update_booking_status(
         self, booking_id: str, status: BookingStatus
     ) -> Booking | None:
@@ -404,6 +572,58 @@ class InMemoryDatabase(DatabaseClient):
         data["updated_at"] = _utc_now_iso()
         booking = Booking.model_validate(data)
         self._bookings[booking_id] = booking.model_dump(mode="json")
+        return booking
+
+    def update_booking_status_if(
+        self,
+        booking_id: str,
+        expected_current_statuses: list[BookingStatus],
+        new_status: BookingStatus,
+        decided_by: str | None = None,
+        decided_at: datetime | None = None,
+    ) -> Booking | None:
+        data = self._bookings.get(booking_id)
+        if not data:
+            return None
+        curr_status = data.get("status")
+        expected_vals = [s.value if hasattr(s, "value") else str(s) for s in expected_current_statuses]
+        if curr_status not in expected_vals:
+            return None
+        data["status"] = new_status.value if hasattr(new_status, "value") else str(new_status)
+        data["updated_at"] = _utc_now_iso()
+        if decided_by is not None:
+            data["decided_by"] = decided_by
+        if decided_at is not None:
+            data["decided_at"] = decided_at.isoformat()
+        if data["status"] == BookingStatus.COMPLETED.value:
+            data["completed_at"] = _utc_now_iso()
+        booking = Booking.model_validate(data)
+        self._bookings[booking_id] = booking.model_dump(mode="json")
+        return booking
+
+    def add_booking_rating(
+        self,
+        booking_id: str,
+        rating: int,
+    ) -> Booking | None:
+        data = self._bookings.get(booking_id)
+        if not data:
+            return None
+        data["rating"] = int(rating)
+        data["updated_at"] = _utc_now_iso()
+        booking = Booking.model_validate(data)
+        self._bookings[booking_id] = booking.model_dump(mode="json")
+
+        target_id = booking.target_id
+        if target_id in self._machines:
+            m_data = self._machines[target_id]
+            cur_count = int(m_data.get("rating_count") or 0)
+            cur_avg = float(m_data.get("rating_avg") or 0.0)
+            new_count = cur_count + 1
+            new_avg = round(((cur_avg * cur_count) + rating) / new_count, 2)
+            m_data["rating_count"] = new_count
+            m_data["rating_avg"] = new_avg
+            self._machines[target_id] = m_data
         return booking
 
     # ── Hotspots ──────────────────────────────────────────────────────────────
@@ -691,7 +911,53 @@ class PostgresClient(DatabaseClient):
     def forget_farmer(self, chat_id: int) -> None:
         conn = self._get_conn()
         with conn.transaction():
+            conn.execute("DELETE FROM chat_flow WHERE chat_id = %s", (str(chat_id),))
             conn.execute("DELETE FROM farmers WHERE chat_id = %s", (str(chat_id),))
+
+    # ── Interactive chat flows ────────────────────────────────────────────────
+
+    def get_chat_flow(self, chat_id: int) -> ChatFlow | None:
+        conn = self._get_conn()
+        cur = conn.execute("SELECT * FROM chat_flow WHERE chat_id = %s", (str(chat_id),))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [desc.name for desc in cur.description]
+        d = dict(zip(cols, row))
+        d["chat_id"] = int(d["chat_id"])
+        return ChatFlow.model_validate(d)
+
+    def put_chat_flow(self, flow: ChatFlow) -> None:
+        conn = self._get_conn()
+        import json
+        with conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO chat_flow (chat_id, flow, step, data, attempts, locked_until, updated_at)
+                VALUES (%(chat_id)s, %(flow)s, %(step)s, %(data)s, %(attempts)s, %(locked_until)s, %(updated_at)s)
+                ON CONFLICT (chat_id) DO UPDATE SET
+                    flow         = EXCLUDED.flow,
+                    step         = EXCLUDED.step,
+                    data         = EXCLUDED.data,
+                    attempts     = EXCLUDED.attempts,
+                    locked_until = EXCLUDED.locked_until,
+                    updated_at   = now()
+                """,
+                {
+                    "chat_id": str(flow.chat_id),
+                    "flow": flow.flow,
+                    "step": flow.step,
+                    "data": json.dumps(flow.data),
+                    "attempts": flow.attempts,
+                    "locked_until": flow.locked_until,
+                    "updated_at": flow.updated_at,
+                },
+            )
+
+    def delete_chat_flow(self, chat_id: int) -> None:
+        conn = self._get_conn()
+        with conn.transaction():
+            conn.execute("DELETE FROM chat_flow WHERE chat_id = %s", (str(chat_id),))
 
     # ── Conversation memory ───────────────────────────────────────────────────
 
@@ -850,6 +1116,27 @@ class PostgresClient(DatabaseClient):
         cols = [desc.name for desc in cur.description]
         return Provider.model_validate(dict(zip(cols, row)))
 
+    def get_provider_by_chat_id(self, telegram_chat_id: int | str) -> Provider | None:
+        conn = self._get_conn()
+        cur = conn.execute(
+            "SELECT * FROM providers WHERE telegram_chat_id = %s", (str(telegram_chat_id),)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [desc.name for desc in cur.description]
+        return Provider.model_validate(dict(zip(cols, row)))
+
+    def list_providers(self, status: ProviderStatus | None = None) -> list[Provider]:
+        conn = self._get_conn()
+        if status is not None:
+            st = status.value if hasattr(status, "value") else str(status)
+            cur = conn.execute("SELECT * FROM providers WHERE status = %s ORDER BY created_at DESC", (st,))
+        else:
+            cur = conn.execute("SELECT * FROM providers ORDER BY created_at DESC")
+        cols = [desc.name for desc in cur.description]
+        return [Provider.model_validate(dict(zip(cols, r))) for r in cur.fetchall()]
+
     def update_provider_status(
         self,
         provider_id: str,
@@ -949,6 +1236,52 @@ class PostgresClient(DatabaseClient):
         cols = [desc.name for desc in cur.description]
         return [_machine_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
 
+    def list_machines_by_provider(self, provider_id: str) -> list[Machine]:
+        conn = self._get_conn()
+        cur = conn.execute(
+            "SELECT * FROM machines WHERE provider_id = %s ORDER BY machine_id ASC", (provider_id,)
+        )
+        cols = [desc.name for desc in cur.description]
+        return [_machine_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
+
+    def list_bookable_machines(
+        self,
+        lat: float | None = None,
+        lon: float | None = None,
+        radius_km: float | None = None,
+    ) -> list[Machine]:
+        """Return ACTIVE machines whose provider is VERIFIED (or legacy directory)."""
+        conn = self._get_conn()
+        if lat is not None and lon is not None and radius_km is not None:
+            lat_min, lat_max, lon_min, lon_max = _lat_lon_bbox(lat, lon, radius_km)
+            cur = conn.execute(
+                """
+                SELECT m.*
+                FROM machines m
+                LEFT JOIN providers p ON p.provider_id = m.provider_id
+                WHERE m.status = 'ACTIVE'
+                  AND (p.status = 'VERIFIED' OR m.provider_id IS NULL)
+                  AND m.lat BETWEEN %s AND %s
+                  AND m.lon BETWEEN %s AND %s
+                """,
+                (lat_min, lat_max, lon_min, lon_max),
+            )
+            cols = [desc.name for desc in cur.description]
+            candidates = [_machine_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
+            return [m for m in candidates if _haversine_km(lat, lon, m.lat, m.lon) <= radius_km]
+        else:
+            cur = conn.execute(
+                """
+                SELECT m.*
+                FROM machines m
+                LEFT JOIN providers p ON p.provider_id = m.provider_id
+                WHERE m.status = 'ACTIVE'
+                  AND (p.status = 'VERIFIED' OR m.provider_id IS NULL)
+                """
+            )
+            cols = [desc.name for desc in cur.description]
+            return [_machine_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
+
     def list_machines_nearby(
         self,
         lat: float,
@@ -958,23 +1291,7 @@ class PostgresClient(DatabaseClient):
         """Bounding-box pre-filter in SQL (no PostGIS), exact haversine in Python.
         Only returns machines whose provider status = VERIFIED and machine status = ACTIVE.
         """
-        lat_min, lat_max, lon_min, lon_max = _lat_lon_bbox(lat, lon, radius_km)
-        conn = self._get_conn()
-        cur = conn.execute(
-            """
-            SELECT m.*
-            FROM machines m
-            JOIN providers p ON p.provider_id = m.provider_id
-            WHERE m.status = 'ACTIVE'
-              AND p.status = 'VERIFIED'
-              AND m.lat BETWEEN %s AND %s
-              AND m.lon BETWEEN %s AND %s
-            """,
-            (lat_min, lat_max, lon_min, lon_max),
-        )
-        cols = [desc.name for desc in cur.description]
-        candidates = [_machine_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
-        return [m for m in candidates if _haversine_km(lat, lon, m.lat, m.lon) <= radius_km]
+        return self.list_bookable_machines(lat=lat, lon=lon, radius_km=radius_km)
 
     # ── Buyers ────────────────────────────────────────────────────────────────
 
@@ -1041,6 +1358,42 @@ class PostgresClient(DatabaseClient):
         cols = [desc.name for desc in cur.description]
         return [_buyer_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
 
+    def list_bookable_buyers(
+        self,
+        lat: float | None = None,
+        lon: float | None = None,
+        radius_km: float | None = None,
+    ) -> list[Buyer]:
+        """Return commercial buyers whose provider is VERIFIED (or legacy directory)."""
+        conn = self._get_conn()
+        if lat is not None and lon is not None and radius_km is not None:
+            lat_min, lat_max, lon_min, lon_max = _lat_lon_bbox(lat, lon, radius_km)
+            cur = conn.execute(
+                """
+                SELECT b.*
+                FROM buyers b
+                LEFT JOIN providers p ON p.provider_id = b.provider_id
+                WHERE (p.status = 'VERIFIED' OR b.provider_id IS NULL)
+                  AND b.lat BETWEEN %s AND %s
+                  AND b.lon BETWEEN %s AND %s
+                """,
+                (lat_min, lat_max, lon_min, lon_max),
+            )
+            cols = [desc.name for desc in cur.description]
+            candidates = [_buyer_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
+            return [b for b in candidates if _haversine_km(lat, lon, b.lat, b.lon) <= radius_km]
+        else:
+            cur = conn.execute(
+                """
+                SELECT b.*
+                FROM buyers b
+                LEFT JOIN providers p ON p.provider_id = b.provider_id
+                WHERE (p.status = 'VERIFIED' OR b.provider_id IS NULL)
+                """
+            )
+            cols = [desc.name for desc in cur.description]
+            return [_buyer_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
+
     # ── Bookings ──────────────────────────────────────────────────────────────
 
     def put_booking(self, booking: Booking) -> None:
@@ -1050,17 +1403,22 @@ class PostgresClient(DatabaseClient):
                 """
                 INSERT INTO bookings (
                     booking_id, farmer_chat_id, provider_id, option_type, target_id,
-                    acres, requested_date, status, rating, created_at, updated_at, completed_at
+                    acres, requested_date, status, rating, created_at, updated_at, completed_at,
+                    expires_at, decided_at, decided_by
                 ) VALUES (
                     %(booking_id)s, %(farmer_chat_id)s, %(provider_id)s, %(option_type)s,
                     %(target_id)s, %(acres)s, %(requested_date)s, %(status)s, %(rating)s,
-                    %(created_at)s, %(updated_at)s, %(completed_at)s
+                    %(created_at)s, %(updated_at)s, %(completed_at)s,
+                    %(expires_at)s, %(decided_at)s, %(decided_by)s
                 )
                 ON CONFLICT (booking_id) DO UPDATE SET
                     status       = EXCLUDED.status,
                     rating       = EXCLUDED.rating,
                     updated_at   = now(),
-                    completed_at = EXCLUDED.completed_at
+                    completed_at = EXCLUDED.completed_at,
+                    expires_at   = EXCLUDED.expires_at,
+                    decided_at   = EXCLUDED.decided_at,
+                    decided_by   = EXCLUDED.decided_by
                 """,
                 {
                     "booking_id": booking.booking_id,
@@ -1077,6 +1435,9 @@ class PostgresClient(DatabaseClient):
                     "created_at": booking.created_at,
                     "updated_at": booking.updated_at,
                     "completed_at": booking.completed_at,
+                    "expires_at": booking.expires_at,
+                    "decided_at": booking.decided_at,
+                    "decided_by": booking.decided_by,
                 },
             )
 
@@ -1098,6 +1459,33 @@ class PostgresClient(DatabaseClient):
         cols = [desc.name for desc in cur.description]
         return [_booking_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
 
+    def list_bookings_by_provider(self, provider_id: str) -> list[Booking]:
+        conn = self._get_conn()
+        cur = conn.execute(
+            "SELECT * FROM bookings WHERE provider_id = %s ORDER BY created_at DESC",
+            (provider_id,),
+        )
+        cols = [desc.name for desc in cur.description]
+        return [_booking_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
+
+    def list_stale_pending_bookings(self, cutoff_utc: datetime) -> list[Booking]:
+        conn = self._get_conn()
+        default_cutoff = cutoff_utc - timedelta(hours=48)
+        cur = conn.execute(
+            """
+            SELECT * FROM bookings
+            WHERE status = 'PENDING'
+              AND (
+                (expires_at IS NOT NULL AND expires_at <= %s)
+                OR (expires_at IS NULL AND created_at <= %s)
+              )
+            ORDER BY created_at ASC
+            """,
+            (cutoff_utc, default_cutoff),
+        )
+        cols = [desc.name for desc in cur.description]
+        return [_booking_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
+
     def update_booking_status(
         self, booking_id: str, status: BookingStatus
     ) -> Booking | None:
@@ -1114,6 +1502,83 @@ class PostgresClient(DatabaseClient):
                 (status.value, status.value, booking_id),
             )
         return self.get_booking(booking_id)
+
+    def update_booking_status_if(
+        self,
+        booking_id: str,
+        expected_current_statuses: list[BookingStatus],
+        new_status: BookingStatus,
+        decided_by: str | None = None,
+        decided_at: datetime | None = None,
+    ) -> Booking | None:
+        conn = self._get_conn()
+        expected_vals = [s.value if hasattr(s, "value") else str(s) for s in expected_current_statuses]
+        new_val = new_status.value if hasattr(new_status, "value") else str(new_status)
+        with conn.transaction():
+            cur = conn.execute(
+                """
+                UPDATE bookings
+                SET status       = %(new_status)s,
+                    decided_by   = COALESCE(%(decided_by)s, decided_by),
+                    decided_at   = COALESCE(%(decided_at)s, decided_at),
+                    updated_at   = now(),
+                    completed_at = CASE WHEN %(new_status)s = 'COMPLETED' THEN now() ELSE completed_at END
+                WHERE booking_id = %(booking_id)s
+                  AND status = ANY(%(expected_statuses)s)
+                RETURNING *
+                """,
+                {
+                    "new_status": new_val,
+                    "decided_by": decided_by,
+                    "decided_at": decided_at,
+                    "booking_id": booking_id,
+                    "expected_statuses": expected_vals,
+                },
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            cols = [desc.name for desc in cur.description]
+            return _booking_from_row(dict(zip(cols, row)))
+
+    def add_booking_rating(
+        self,
+        booking_id: str,
+        rating: int,
+    ) -> Booking | None:
+        conn = self._get_conn()
+        with conn.transaction():
+            cur = conn.execute(
+                """
+                UPDATE bookings
+                SET rating     = %(rating)s,
+                    updated_at = now()
+                WHERE booking_id = %(booking_id)s
+                RETURNING *
+                """,
+                {"rating": rating, "booking_id": booking_id},
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            cols = [desc.name for desc in cur.description]
+            booking = _booking_from_row(dict(zip(cols, row)))
+
+            # Update machine rating if booking is for a machine
+            conn.execute(
+                """
+                UPDATE machines
+                SET rating_avg = ROUND(
+                        ((COALESCE(rating_avg, 0.0) * rating_count + %(rating)s)::numeric)
+                        / ((rating_count + 1)::numeric),
+                        2
+                    ),
+                    rating_count = rating_count + 1
+                WHERE machine_id = %(target_id)s
+                """,
+                {"rating": rating, "target_id": booking.target_id},
+            )
+            return booking
 
     # ── Hotspots ──────────────────────────────────────────────────────────────
 
@@ -1227,7 +1692,7 @@ class PostgresClient(DatabaseClient):
         conn = self._get_conn()
         with conn.transaction():
             for table in (
-                "bookings", "chat_messages", "chat_state",
+                "bookings", "chat_messages", "chat_state", "chat_flow",
                 "hotspots", "processed_updates", "geocode_cache",
                 "machines", "buyers", "providers", "farmers",
             ):

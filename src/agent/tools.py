@@ -213,9 +213,9 @@ async def find_residue_options(chat_id: int) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("Weather fetch failed for (%s, %s): %s", session.lat, session.lon, exc)
 
-    # Load resources
-    machines = db.list_machines()
-    buyers = db.list_buyers()
+    # Load verified and active resources
+    machines = db.list_bookable_machines(lat=session.lat, lon=session.lon, radius_km=50.0)
+    buyers = db.list_bookable_buyers(lat=session.lat, lon=session.lon, radius_km=50.0)
     constants = get_agricultural_constants()
 
     # Deterministic Optimization
@@ -270,6 +270,44 @@ async def find_residue_options(chat_id: int) -> dict[str, Any]:
 
 
 @tool
+def list_nearby_machines(chat_id: int, radius_km: float = 50.0) -> dict[str, Any]:
+    """Lists verified active agricultural machinery registered near the farmer's location.
+
+    Args:
+        chat_id: Telegram user/chat ID of the farmer.
+        radius_km: Operational search radius in kilometers (default 50 km).
+
+    Returns:
+        List of available machinery with rates, service radius, provider name, and ratings.
+    """
+    from src.marketplace import services
+
+    db = get_db()
+    session = db.get_session(chat_id)
+    lat = session.lat if session and session.lat is not None else 30.3753
+    lon = session.lon if session and session.lon is not None else 76.1517
+
+    views = services.list_nearby_machines(db, lat=lat, lon=lon, radius_km=radius_km)
+    results = []
+    for v in views[:10]:
+        results.append({
+            "machine_id": v.machine_id,
+            "type": str(v.machine_type.value if hasattr(v.machine_type, "value") else v.machine_type),
+            "provider_name": v.provider_name,
+            "location": f"{v.village}, {v.district}",
+            "distance_km": v.distance_km,
+            "rate_per_acre_inr": v.rate_per_acre,
+            "rating_avg": v.rating_avg,
+            "rating_count": v.rating_count,
+        })
+    return {
+        "status": "success",
+        "count": len(results),
+        "machines": results,
+    }
+
+
+@tool
 def nearby_fire_activity(chat_id: int, radius_km: float = 25.0) -> dict[str, Any]:
     """Checks for active satellite fire detections (FIRMS hotspots) within a given radius of the farmer's location.
 
@@ -316,8 +354,10 @@ def create_booking_request(chat_id: int, option_index: int) -> dict[str, Any]:
         option_index: Selected option number from find_residue_options (1, 2, or 3).
 
     Returns:
-        Booking confirmation details including booking_id, status PENDING, and target provider.
+        Booking confirmation details including canonical booking_id (BK-XXXXXXXX) and status.
     """
+    from src.marketplace import services
+
     db = get_db()
     session = db.get_session(chat_id)
     if not session or not session.last_options:
@@ -335,25 +375,31 @@ def create_booking_request(chat_id: int, option_index: int) -> dict[str, Any]:
         }
 
     chosen = session.last_options[idx]
-    booking_id = f"BKG_{int(time.time())}_{chat_id % 10000}"
+    target_id = chosen.get("target_id") or chosen.get("machine_id") or chosen.get("buyer_id") or f"TGT_{idx}"
+    opt_type = chosen.get("option_type", "IN_SITU")
+    req_date = date.fromisoformat(chosen["earliest_date"]) if "earliest_date" in chosen else date.today()
+    acres = session.acres or 10.0
 
-    booking = Booking(
-        booking_id=booking_id,
-        farmer_chat_id=chat_id,
-        option_type=chosen.get("option_type", "IN_SITU"),
-        target_id=chosen.get("target_id", "UNKNOWN"),
-        acres=session.acres or 0.0,
-        requested_date=date.fromisoformat(chosen["earliest_date"]) if "earliest_date" in chosen else date.today(),
-        status=BookingStatus.PENDING,
-    )
-    db.put_booking(booking)
-
-    return {
-        "status": "CONFIRMED_PENDING",
-        "booking_id": booking.booking_id,
-        "target_name": chosen.get("target_name"),
-        "acres": booking.acres,
-        "requested_date": booking.requested_date.isoformat(),
-        "estimated_net_cost_inr": chosen.get("net_cost"),
-        "message": f"Booking #{booking.booking_id} created in PENDING status. The CHC operator / buyer has been notified.",
-    }
+    try:
+        booking, _ = services.create_booking(
+            db=db,
+            farmer_chat_id=chat_id,
+            target_id=target_id,
+            acres=acres,
+            requested_date=req_date,
+            option_type=opt_type,
+        )
+        return {
+            "status": "PENDING",
+            "booking_id": booking.booking_id,
+            "target_name": chosen.get("target_name"),
+            "acres": booking.acres,
+            "requested_date": booking.requested_date.isoformat(),
+            "estimated_net_cost_inr": chosen.get("net_cost"),
+            "message": f"Booking #{booking.booking_id} created in PENDING status. Operator notified for confirmation.",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to create booking: {exc}",
+        }

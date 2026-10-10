@@ -354,13 +354,62 @@ class TelegramClient:
             logger.error("getUpdates request error: %s", exc)
             raise TelegramApiError(500, f"getUpdates failed: {exc}") from exc
 
-    # ── Method aliases for snake_case and camelCase compatibility ───────────
-    send_message = sendMessage
-    send_chat_action = sendChatAction
-    answer_callback_query = answerCallbackQuery
-    get_file = getFile
-    download_file = downloadFile
-    set_webhook = setWebhook
-    delete_webhook = deleteWebhook
-    get_updates = getUpdates
+    # ── snake_case forwarding methods (delegates via self so subclass overrides work) ──
+    async def send_message(
+        self,
+        chat_id: int | str,
+        text: str,
+        parse_mode: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+        disable_web_page_preview: bool = True,
+    ) -> list[dict[str, Any]]:
+        return await self.sendMessage(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+
+    async def send_chat_action(self, chat_id: int | str, action: str = "typing") -> dict[str, Any]:
+        return await self.sendChatAction(chat_id=chat_id, action=action)
+
+    async def answer_callback_query(
+        self,
+        callback_query_id: str,
+        text: str | None = None,
+        show_alert: bool = False,
+        url: str | None = None,
+        cache_time: int = 0,
+    ) -> dict[str, Any]:
+        return await self.answerCallbackQuery(
+            callback_query_id=callback_query_id,
+            text=text,
+            show_alert=show_alert,
+            url=url,
+            cache_time=cache_time,
+        )
+
+    async def get_file(self, file_id: str) -> dict[str, Any]:
+        return await self.getFile(file_id=file_id)
+
+    async def download_file(self, file_path: str) -> bytes:
+        return await self.downloadFile(file_path=file_path)
+
+    async def set_webhook(self, url: str, **kwargs: Any) -> dict[str, Any]:
+        return await self.setWebhook(url=url, **kwargs)
+
+    async def delete_webhook(self) -> dict[str, Any]:
+        return await self.deleteWebhook()
+
+    async def get_updates(
+        self,
+        offset: int | None = None,
+        limit: int = 100,
+        timeout: int = 30,
+        allowed_updates: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.getUpdates(
+            offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates
+        )
 

@@ -152,21 +152,43 @@ Farmer booking requests for machines and buyer dispatches.
 
 | Column | Type | Notes |
 |---|---|---|
-| `booking_id` | `text PK` | |
+| `booking_id` | `text PK` | Deterministic format: `BK-<timestamp>-<rand>` |
 | `farmer_chat_id` | `text FK → farmers` | |
 | `provider_id` | `text FK → providers NULL` | |
 | `option_type` | `text CHECK` | `IN_SITU / EX_SITU` |
 | `target_id` | `text` | `machine_id` or `buyer_id` |
 | `acres` | `numeric(8,2)` | |
 | `requested_date` | `date` | |
-| `status` | `text CHECK` | `PENDING / PENDING_MANUAL / CONFIRMED / REJECTED / EXPIRED / COMPLETED` |
+| `status` | `text CHECK` | `PENDING_CONFIRMATION / PENDING_MANUAL / CONFIRMED / IN_PROGRESS / COMPLETED / CANCELLED / EXPIRED / DECLINED` |
 | `rating` | `smallint NULL` | 1–5 |
 | `created_at`, `updated_at` | `timestamptz` | |
+| `expires_at` | `timestamptz NULL` | 24-hour auto-expiration timestamp |
+| `decided_at` | `timestamptz NULL` | Timestamp when operator accepted/declined |
+| `decided_by` | `text NULL` | Operator / admin ID |
 | `completed_at` | `timestamptz NULL` | Set when status = COMPLETED |
 
 **Indexes:**
 - `(farmer_chat_id, created_at DESC)` — `list_bookings_by_farmer()`: farmer booking history
 - `(provider_id, created_at DESC)` — provider job queue
+- `(status, expires_at)` — `list_expired_bookings()`: expiry sweeper queue
+
+---
+
+### `chat_flow`
+
+Ephemeral multi-step wizard state machine (e.g. operator onboarding, machinery addition, interactive booking confirmation, ratings feedback).
+
+| Column | Type | Notes |
+|---|---|---|
+| `chat_id` | `text PK` | Farmer or operator chat ID |
+| `flow` | `text` | `OWNER_PORTAL`, `OWNER_REGISTER`, `ADD_MACHINE`, `CONFIRM_BOOKING`, etc. |
+| `step` | `text` | Current wizard step |
+| `data` | `jsonb` | Accumulated wizard inputs |
+| `attempts` | `int default 0` | Failed passcode attempts for lockout protection |
+| `locked_until` | `timestamptz NULL` | Lockout expiration timestamp |
+| `updated_at` | `timestamptz` | Last updated timestamp |
+
+**Queries served:** `get_chat_flow(chat_id)`, `put_chat_flow(flow)`, `delete_chat_flow(chat_id)`
 
 ---
 

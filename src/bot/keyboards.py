@@ -106,3 +106,82 @@ def get_booking_confirm_keyboard(
             ]
         ]
     }
+
+
+def get_accept_decline_keyboard(booking_id: str) -> dict[str, Any]:
+    """Inline keyboard for CHC / Buyer operator to accept or decline a booking."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Accept Job", "callback_data": f"bk_acc:{booking_id}"},
+                {"text": "❌ Decline", "callback_data": f"bk_dec:{booking_id}"},
+            ]
+        ]
+    }
+
+
+def get_rating_keyboard(booking_id: str) -> dict[str, Any]:
+    """Inline keyboard for farmer to rate completed service (1-5 stars)."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "⭐ 1", "callback_data": f"bk_rate:{booking_id}:1"},
+                {"text": "⭐⭐ 2", "callback_data": f"bk_rate:{booking_id}:2"},
+                {"text": "⭐⭐⭐ 3", "callback_data": f"bk_rate:{booking_id}:3"},
+            ],
+            [
+                {"text": "⭐⭐⭐⭐ 4", "callback_data": f"bk_rate:{booking_id}:4"},
+                {"text": "⭐⭐⭐⭐⭐ 5", "callback_data": f"bk_rate:{booking_id}:5"},
+            ],
+        ]
+    }
+
+
+def get_admin_approve_reject_keyboard(provider_id: str) -> dict[str, Any]:
+    """Inline keyboard for admins to verify or reject a provider registration."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Approve Provider", "callback_data": f"adm_app:{provider_id}"},
+                {"text": "❌ Reject Provider", "callback_data": f"adm_rej:{provider_id}"},
+            ]
+        ]
+    }
+
+
+def get_owner_menu_keyboard(is_registered: bool = False) -> dict[str, Any]:
+    """Inline menu for CHC / commercial buyer operators."""
+    if not is_registered:
+        return {
+            "inline_keyboard": [
+                [{"text": "📝 Register as CHC Operator", "callback_data": "own_reg:CHC"}],
+                [{"text": "🏭 Register as Straw Buyer", "callback_data": "own_reg:BUYER"}],
+            ]
+        }
+    return {
+        "inline_keyboard": [
+            [{"text": "🚜 Add New Machine", "callback_data": "own_add_mch"}],
+            [{"text": "📋 View My Machinery", "callback_data": "own_list_mch"}],
+            [{"text": "📥 View Incoming Jobs", "callback_data": "own_list_bkg"}],
+        ]
+    }
+
+
+def get_machine_type_selection_keyboard() -> dict[str, Any]:
+    """Inline keyboard selecting type of agricultural machinery to add."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "Super Seeder", "callback_data": "mch_type:SUPER_SEEDER"},
+                {"text": "Happy Seeder", "callback_data": "mch_type:HAPPY_SEEDER"},
+            ],
+            [
+                {"text": "Smart Seeder", "callback_data": "mch_type:SMART_SEEDER"},
+                {"text": "Baler", "callback_data": "mch_type:BALER"},
+            ],
+            [
+                {"text": "Mulcher/Chopper", "callback_data": "mch_type:MULCHER_CHOPPER"},
+                {"text": "Rotavator", "callback_data": "mch_type:ROTAVATOR"},
+            ],
+        ]
+    }
