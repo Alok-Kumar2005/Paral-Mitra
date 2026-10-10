@@ -194,6 +194,9 @@ class DatabaseClient(ABC):
     def list_bookings_by_provider(self, provider_id: str) -> list[Booking]: ...
 
     @abstractmethod
+    def list_all_bookings(self) -> list[Booking]: ...
+
+    @abstractmethod
     def list_stale_pending_bookings(self, cutoff_utc: datetime) -> list[Booking]:
         """Return PENDING bookings that have passed their expires_at (or 48h default)."""
         ...
@@ -547,6 +550,9 @@ class InMemoryDatabase(DatabaseClient):
             for d in self._bookings.values()
             if d.get("provider_id") == provider_id
         ]
+
+    def list_all_bookings(self) -> list[Booking]:
+        return [Booking.model_validate(d) for d in self._bookings.values()]
 
     def list_stale_pending_bookings(self, cutoff_utc: datetime) -> list[Booking]:
         res: list[Booking] = []
@@ -1465,6 +1471,12 @@ class PostgresClient(DatabaseClient):
             "SELECT * FROM bookings WHERE provider_id = %s ORDER BY created_at DESC",
             (provider_id,),
         )
+        cols = [desc.name for desc in cur.description]
+        return [_booking_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
+
+    def list_all_bookings(self) -> list[Booking]:
+        conn = self._get_conn()
+        cur = conn.execute("SELECT * FROM bookings ORDER BY created_at DESC")
         cols = [desc.name for desc in cur.description]
         return [_booking_from_row(dict(zip(cols, r))) for r in cur.fetchall()]
 

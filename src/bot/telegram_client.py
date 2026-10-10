@@ -6,7 +6,8 @@ Features:
 - Auto-splitting of messages exceeding Telegram's 4096-character limit.
 - Resilient 429 Too Many Requests rate limit handling with retry_after backoff.
 - Support for sendMessage, sendChatAction, answerCallbackQuery, getFile/download,
-  setWebhook, deleteWebhook, and getUpdates (long polling).
+  setWebhook, deleteWebhook, getUpdates (long polling),
+  sendVoice and sendAudio (multipart file upload).
 """
 
 from __future__ import annotations
@@ -199,6 +200,65 @@ class TelegramClient:
                 )
 
             return data.get("result", {})
+
+    async def _request_multipart(
+        self,
+        endpoint: str,
+        fields: dict[str, Any],
+        file_field: str,
+        file_bytes: bytes,
+        filename: str,
+        mime_type: str,
+        max_retries: int = 3,
+    ) -> dict[str, Any]:
+        """Performs a multipart/form-data POST to Telegram (for file uploads).
+
+        Uses httpx files= parameter so the body is streamed as multipart.
+        Applies the same 429 backoff logic as _request.
+        """
+        url = f"{self.bot_url}/{endpoint}"
+        retries = 0
+
+        while True:
+            files = {file_field: (filename, file_bytes, mime_type)}
+            data = {k: str(v) for k, v in fields.items() if v is not None}
+
+            try:
+                response = await self._client.post(url, data=data, files=files)
+            except httpx.RequestError as exc:
+                logger.error("HTTP multipart request error for %s: %s", endpoint, exc)
+                raise TelegramApiError(500, f"Multipart request failed: {exc}") from exc
+
+            if response.status_code == 429:
+                retries += 1
+                if retries > max_retries:
+                    raise TelegramApiError(429, "Too Many Requests (max retries exceeded)")
+                try:
+                    retry_after = response.json().get("parameters", {}).get("retry_after", 1)
+                except Exception:
+                    retry_after = int(response.headers.get("Retry-After", 1))
+                await asyncio.sleep(retry_after)
+                continue
+
+            try:
+                resp_data = response.json()
+            except Exception as exc:
+                raise TelegramApiError(
+                    response.status_code,
+                    f"Non-JSON multipart response: {response.text[:200]}",
+                ) from exc
+
+            if not response.is_success or not resp_data.get("ok"):
+                description = resp_data.get("description", "Unknown Telegram error")
+                error_code = resp_data.get("error_code", response.status_code)
+                raise TelegramApiError(
+                    status_code=response.status_code,
+                    description=description,
+                    error_code=error_code,
+                    parameters=resp_data.get("parameters", {}),
+                )
+
+            return resp_data.get("result", {})
 
     async def sendMessage(
         self,
@@ -411,5 +471,114 @@ class TelegramClient:
     ) -> list[dict[str, Any]]:
         return await self.getUpdates(
             offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates
+        )
+
+    async def sendVoice(
+        self,
+        chat_id: int | str,
+        voice_bytes: bytes,
+        filename: str = "voice.ogg",
+        mime_type: str = "audio/ogg",
+        duration: int | None = None,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Sends an audio file as a Telegram voice note (sendVoice).
+
+        The file must be in OGG/Opus, MP3, or M4A format to render as a native
+        voice message in Telegram clients. Other formats are rejected or shown
+        as generic audio.
+
+        Uses multipart/form-data upload (not file_id or URL).
+        """
+        fields: dict[str, Any] = {"chat_id": chat_id}
+        if duration is not None:
+            fields["duration"] = duration
+        if reply_markup is not None:
+            import json
+            fields["reply_markup"] = json.dumps(reply_markup)
+        return await self._request_multipart(
+            endpoint="sendVoice",
+            fields=fields,
+            file_field="voice",
+            file_bytes=voice_bytes,
+            filename=filename,
+            mime_type=mime_type,
+        )
+
+    async def sendAudio(
+        self,
+        chat_id: int | str,
+        audio_bytes: bytes,
+        filename: str = "audio.mp3",
+        mime_type: str = "audio/mpeg",
+        title: str | None = None,
+        performer: str | None = None,
+        duration: int | None = None,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Sends an audio file as a Telegram audio message (sendAudio).
+
+        Unlike sendVoice, sendAudio shows a music player UI (not a voice note).
+        Use sendVoice for spoken content; use sendAudio for music/podcast style.
+        """
+        fields: dict[str, Any] = {"chat_id": chat_id}
+        if title is not None:
+            fields["title"] = title
+        if performer is not None:
+            fields["performer"] = performer
+        if duration is not None:
+            fields["duration"] = duration
+        if reply_markup is not None:
+            import json
+            fields["reply_markup"] = json.dumps(reply_markup)
+        return await self._request_multipart(
+            endpoint="sendAudio",
+            fields=fields,
+            file_field="audio",
+            file_bytes=audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
+        )
+
+    # ── Snake-case aliases for sendVoice / sendAudio ───────────────────────────
+
+    async def send_voice(
+        self,
+        chat_id: int | str,
+        voice_bytes: bytes,
+        filename: str = "voice.ogg",
+        mime_type: str = "audio/ogg",
+        duration: int | None = None,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self.sendVoice(
+            chat_id=chat_id,
+            voice_bytes=voice_bytes,
+            filename=filename,
+            mime_type=mime_type,
+            duration=duration,
+            reply_markup=reply_markup,
+        )
+
+    async def send_audio(
+        self,
+        chat_id: int | str,
+        audio_bytes: bytes,
+        filename: str = "audio.mp3",
+        mime_type: str = "audio/mpeg",
+        title: str | None = None,
+        performer: str | None = None,
+        duration: int | None = None,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self.sendAudio(
+            chat_id=chat_id,
+            audio_bytes=audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
+            title=title,
+            performer=performer,
+            duration=duration,
+            reply_markup=reply_markup,
         )
 

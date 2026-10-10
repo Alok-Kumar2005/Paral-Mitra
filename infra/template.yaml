@@ -122,6 +122,8 @@ Globals:
         DB_ENV: prod
         SECRET_MODE: !Ref SecretMode
         S3_BUCKET_NAME: alok-ki-balti
+        # Feature flags (safe defaults)
+        VOICE_REPLY_ENABLED: "false"   # Set to "true" after Polly is tested
         # ── Injected secrets (only populated when SecretMode=env) ─────────
         TELEGRAM_BOT_TOKEN: !If [UseSecretModeEnv, !Ref TelegramBotToken, ""]
         TELEGRAM_WEBHOOK_SECRET: !If [UseSecretModeEnv, !Ref TelegramWebhookSecret, ""]
@@ -241,6 +243,32 @@ Resources:
                 Resource:
                   - !Sub arn:aws:bedrock:${BedrockRegion}::foundation-model/*
                   - !Sub arn:aws:bedrock:${BedrockRegion}::inference-profile/*
+
+              # Voice input/output: S3 staging, Transcribe STT, Polly TTS.
+              # S3 access is scoped to the voice/* prefix only (least privilege).
+              # Transcribe and Polly do not support resource-level ARN restrictions
+              # on job/speech operations — "*" is required by AWS.
+              - Sid: VoiceS3StagingAccess
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub arn:aws:s3:::alok-ki-balti/voice/*
+
+              - Sid: TranscribeVoiceJobs
+                Effect: Allow
+                Action:
+                  - transcribe:StartTranscriptionJob
+                  - transcribe:GetTranscriptionJob
+                  - transcribe:DeleteTranscriptionJob
+                Resource: "*"   # Transcribe does not support resource-level restrictions
+
+              - Sid: PollyTextToSpeech
+                Effect: Allow
+                Action:
+                  - polly:SynthesizeSpeech
+                Resource: "*"   # Polly does not support resource-level restrictions
 
   IngestRole:
     Type: AWS::IAM::Role

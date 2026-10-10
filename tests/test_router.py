@@ -153,6 +153,16 @@ async def test_router_location_message(
 
 @pytest.mark.asyncio
 async def test_router_voice_message(mock_db: InMemoryDatabase, mock_client: RecordingTelegramClient) -> None:
+    """Voice messages now invoke the real STT pipeline.
+
+    In the unit-test environment (no S3_BUCKET_NAME, boto3 blocked by conftest),
+    the pipeline sends:
+      1. A "processing…" notice
+      2. An error fallback asking the farmer to type or resend
+
+    The test verifies that at least one message was sent and that the farmer
+    receives a meaningful response (not silence).
+    """
     update = {
         "update_id": 1004,
         "message": {
@@ -164,8 +174,12 @@ async def test_router_voice_message(mock_db: InMemoryDatabase, mock_client: Reco
 
     await handle_update(update, client=mock_client, db=mock_db)
 
-    assert len(mock_client.sent_messages) == 1
-    assert "9" in mock_client.sent_messages[0]["text"]
+    # At least one message must reach the farmer (processing notice or fallback)
+    assert len(mock_client.sent_messages) >= 1
+    # All sent messages must target the correct chat
+    for msg in mock_client.sent_messages:
+        assert msg["chat_id"] == 4444
+
 
 
 @pytest.mark.asyncio

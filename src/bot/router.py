@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from src.agent.agent import run_agent_turn  # imported here so tests can monkeypatch
+from src.bot import tts_handler, voice_handler
 from src.bot.flows import admin, booking, farmer, owner
 from src.bot.telegram_client import TelegramClient
+from src.bot.voice_config import POLLY_VOICES
 from src.common.db import DatabaseClient, get_db_client
 from src.common.models import FarmerSession
 
 logger = logging.getLogger(__name__)
+
+_VOICE_REPLY_ENABLED: bool = os.environ.get("VOICE_REPLY_ENABLED", "false").lower() == "true"
 
 
 async def handle_update(
@@ -80,6 +85,9 @@ async def _route_callback_query(
         or data == "cancel_book"
     ):
         await booking.handle_booking_callback(data, chat_id, db, telegram_client, lang=lang)
+    elif data.startswith("tts:"):
+        # Voice reply: synthesize the cached last assistant message with Polly
+        await tts_handler.handle_tts_callback(data, chat_id, session, telegram_client)
 
 
 async def _route_message(
@@ -121,16 +129,30 @@ async def _route_message(
             await telegram_client.send_message(chat_id, loc_msg)
         return
 
-    # 2. Voice / audio messages — transcription not yet available; prompt retry
+    # 2. Voice / audio messages — full STT pipeline via Amazon Transcribe
     if "voice" in msg or "audio" in msg:
+        transcript = await voice_handler.handle_voice_message(
+            msg=msg, session=session, db=db, telegram_client=telegram_client
+        )
+        if transcript is None:
+            # Error already surfaced to farmer; nothing more to do
+            return
+        # Run the normal agent turn with the transcript as the user's message
         lang = session.language or "hi"
-        voice_texts = {
-            "en": "🎙️ Voice notes are not yet supported. Please type your message (e.g. \"I have 9 acres of paddy in Ludhiana\").",
-            "hi": "🎙️ वॉयस नोट अभी उपलब्ध नहीं। कृपया अपना संदेश टाइप करें (जैसे \"मेरे पास लुधियाना में 9 एकड़ धान है\")।",
-            "pa": "🎙️ ਵੌਇਸ ਨੋਟ ਹੁਣੇ ਉਪਲਬਧ ਨਹੀਂ। ਕਿਰਪਾ ਕਰਕੇ ਆਪਣਾ ਸੁਨੇਹਾ ਟਾਈਪ ਕਰੋ (ਜਿਵੇਂ \"ਮੇਰੇ ਕੋਲ ਲੁਧਿਆਣਾ ਵਿੱਚ 9 ਏਕੜ ਝੋਨਾ ਹੈ\")।",
-        }
-        reply = voice_texts.get(lang, voice_texts["en"])
-        await telegram_client.send_message(chat_id, reply)
+        try:
+            await telegram_client.send_chat_action(chat_id, "typing")
+            response_text = await run_agent_turn(
+                chat_id=chat_id,
+                user_message=transcript,
+                db=db,
+            )
+            reply_markup = _build_reply_markup(response_text, session, lang)
+            await telegram_client.send_message(chat_id, response_text, reply_markup=reply_markup)
+        except Exception as exc:
+            logger.error("[Router] Agent voice turn error for chat %s: %s", chat_id, exc)
+            await telegram_client.send_message(
+                chat_id, "⚠️ Service is busy. Please type /options or /machines to proceed."
+            )
         return
 
     # 3. Text message processing
@@ -193,14 +215,53 @@ async def _route_message(
                 user_message=text,
                 db=db,
             )
-            # Attach options keyboard if session has cached options
-            reply_markup = None
-            if session.last_options:
-                from src.bot.keyboards import get_options_keyboard
-                reply_markup = get_options_keyboard(session.last_options[:5], lang=lang)
+            reply_markup = _build_reply_markup(response_text, session, lang)
             await telegram_client.send_message(chat_id, response_text, reply_markup=reply_markup)
         except Exception as exc:
             logger.error("[Router] Agent text turn error for chat %s: %s", chat_id, exc)
             await telegram_client.send_message(
                 chat_id, "⚠️ Service is busy. Please type /options or /machines to proceed."
             )
+
+
+def _build_reply_markup(
+    response_text: str,
+    session: FarmerSession,
+    lang: str,
+) -> dict[str, Any] | None:
+    """Builds the inline keyboard for an agent response.
+
+    - Always attaches the /options keyboard if last_options are cached.
+    - If VOICE_REPLY_ENABLED and the farmer's language has a Polly voice,
+      appends a '🔊 Listen' button that triggers TTS via callback 'tts:last'.
+      The last response text is cached on the session object for retrieval.
+    """
+    # Cache last response for TTS callback (no DB write; in-process for Lambda)
+    object.__setattr__(session, "_voice_last_response", response_text) if hasattr(
+        session, "__dict__"
+    ) else None
+    try:
+        session._voice_last_response = response_text  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    inline_rows: list[list[dict[str, str]]] = []
+
+    # Options keyboard rows (first)
+    options_markup: dict[str, Any] | None = None
+    if session.last_options:
+        from src.bot.keyboards import get_options_keyboard
+        options_markup = get_options_keyboard(session.last_options[:5], lang=lang)
+        if options_markup and "inline_keyboard" in options_markup:
+            inline_rows.extend(options_markup["inline_keyboard"])
+
+    # TTS 'Listen' button (appended as a separate row)
+    if _VOICE_REPLY_ENABLED and lang in POLLY_VOICES:
+        inline_rows.append(
+            [{"text": "🔊 Listen", "callback_data": "tts:last"}]
+        )
+
+    if not inline_rows:
+        return options_markup  # original markup or None
+
+    return {"inline_keyboard": inline_rows}

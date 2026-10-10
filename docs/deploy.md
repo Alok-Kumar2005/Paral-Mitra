@@ -246,3 +246,68 @@ sam deploy --no-build --template-file infra/template.yaml `
 
 4. **Neon database** is external to AWS. Stack deletion does NOT delete farmer data.
    Migrations must be applied manually via `python scripts/migrate.py`.
+
+---
+
+## Voice Feature — IAM Permissions
+
+If you are using `ExistingRoleArn` (i.e. your org's SCPs block `iam:CreateRole`),
+you must manually add the following permissions to your pre-existing role.
+
+These are required for voice input (Amazon Transcribe STT) and optional voice
+reply (Amazon Polly TTS). If `VOICE_REPLY_ENABLED=false` (the default), the
+Polly permission is not exercised but is still safe to include.
+
+### S3 — Voice Staging Prefix
+
+```json
+{
+  "Sid": "VoiceS3StagingAccess",
+  "Effect": "Allow",
+  "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+  "Resource": "arn:aws:s3:::alok-ki-balti/voice/*"
+}
+```
+
+> ℹ️ Replace `alok-ki-balti` with your actual bucket name if different.
+> The `/voice/*` restriction ensures access is limited to the voice staging prefix only.
+
+### Amazon Transcribe — Batch Job Management
+
+```json
+{
+  "Sid": "TranscribeVoiceJobs",
+  "Effect": "Allow",
+  "Action": [
+    "transcribe:StartTranscriptionJob",
+    "transcribe:GetTranscriptionJob",
+    "transcribe:DeleteTranscriptionJob"
+  ],
+  "Resource": "*"
+}
+```
+
+> ℹ️ Amazon Transcribe does **not** support resource-level ARN restrictions
+> on job operations. `"Resource": "*"` is required.
+
+### Amazon Polly — Speech Synthesis
+
+```json
+{
+  "Sid": "PollyTextToSpeech",
+  "Effect": "Allow",
+  "Action": ["polly:SynthesizeSpeech"],
+  "Resource": "*"
+}
+```
+
+> ℹ️ Amazon Polly does **not** support resource-level ARN restrictions.
+> Only the **worker** Lambda role needs these permissions (not receiver, ingest, or sweeper).
+
+### Smoke-testing voice before deployment
+
+```powershell
+# Verify AWS credentials + S3 + Transcribe pipeline end-to-end (no Telegram needed)
+$env:S3_BUCKET_NAME = 'alok-ki-balti'
+python scripts/voice_check.py path/to/sample.ogg hi-IN
+```
