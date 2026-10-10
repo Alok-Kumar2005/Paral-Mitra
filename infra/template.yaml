@@ -71,6 +71,14 @@ Parameters:
       NASA FIRMS MAP_KEY for VIIRS fire data ingestion
       (used only when SecretMode=env).
 
+  DashboardToken:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: >
+      Optional authorization token for the officer dashboard and /api/* endpoints.
+      When set, requests must supply ?token=<this_value>.
+
   WorkerReservedConcurrency:
     Type: Number
     Default: 0
@@ -300,6 +308,21 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
+  ApiRole:
+    Type: AWS::IAM::Role
+    Condition: CreateIamRoles
+    Properties:
+      RoleName: parali-mitra-api-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
   SsmAccessPolicy:
     Type: AWS::IAM::Policy
     Condition: CreateSsmPolicy
@@ -309,6 +332,7 @@ Resources:
         - !Ref WorkerRole
         - !Ref IngestRole
         - !Ref SweeperRole
+        - !Ref ApiRole
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -422,6 +446,54 @@ Resources:
       Tags:
         Project: parali-mitra
 
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: parali-mitra-api
+      Handler: src.handlers.api.handler
+      Description: >
+        Read-only officer dashboard and spatial monitoring API.
+        Serves GET /dashboard and /api/* routes with 5-minute container caching.
+      Timeout: 20
+      MemorySize: 512
+      Role: !If [CreateIamRoles, !GetAtt ApiRole.Arn, !Ref ExistingRoleArn]
+      Environment:
+        Variables:
+          DASHBOARD_TOKEN: !Ref DashboardToken
+      Events:
+        DashboardGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookApi
+            Path: /dashboard
+            Method: GET
+        FiresGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookApi
+            Path: /api/fires
+            Method: GET
+        GapsGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookApi
+            Path: /api/gaps
+            Method: GET
+        MachinesGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookApi
+            Path: /api/machines
+            Method: GET
+        SummaryGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref WebhookApi
+            Path: /api/summary
+            Method: GET
+      Tags:
+        Project: parali-mitra
+
   # ── CloudWatch Log Groups (7-day retention) ───────────────────────────────
 
   ReceiverLogGroup:
@@ -446,6 +518,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${SweeperFunction}
+      RetentionInDays: 7
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
       RetentionInDays: 7
 
   # ── CloudWatch Alarm: DLQ depth ──────────────────────────────────────────
@@ -497,3 +575,9 @@ Outputs:
     Value: !Ref UpdateDlq
     Export:
       Name: ParaliMitra-DlqUrl
+
+  DashboardUrl:
+    Description: Web URL for the officer residue monitoring dashboard
+    Value: !Sub https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/dashboard
+    Export:
+      Name: ParaliMitra-DashboardUrl

@@ -53,6 +53,7 @@ def main() -> int:
 
     # Bedrock region
     bedrock_region = os.getenv("BEDROCK_REGION", region)
+    dashboard_token = os.getenv("DASHBOARD_TOKEN", "")
 
     params = [
         "SecretMode=env",
@@ -63,6 +64,8 @@ def main() -> int:
         f"DatabaseUrl={db_url}",
         f"FirmsMapKey={firms_key}",
     ]
+    if dashboard_token:
+        params.append(f"DashboardToken={dashboard_token}")
 
     cmd = [
         sam_exe,

@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parali Mitra — Officer Residue Dashboard</title>
+  <meta name="description" content="Read-only field officer dashboard for crop residue fire hotspots, machinery coverage gaps, and custom hiring availability across Punjab and Haryana.">
+  
+  <!-- MapLibre GL JS (Pinned CDN v3.6.2) -->
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+
+  <style>
+    :root {
+      --bg-canvas: #f8fafc;
+      --bg-panel: #ffffff;
+      --border-color: #cbd5e1;
+      --text-main: #0f172a;
+      --text-muted: #475569;
+      --primary: #15803d;
+      --primary-hover: #166534;
+      --danger: #dc2626;
+      --danger-bg: #fef2f2;
+      --warning: #ea580c;
+      --warning-bg: #fff7ed;
+      --accent-blue: #0284c7;
+      --accent-blue-bg: #f0f9ff;
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-family);
+      background-color: var(--bg-canvas);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top Bar ── */
+    header {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 10px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #334155;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .badge-live {
+      background: #16a34a;
+      color: #ffffff;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .brand-sub {
+      font-size: 0.8rem;
+      color: #94a3b8;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .as-of-pill {
+      font-size: 0.76rem;
+      color: #cbd5e1;
+      background: #1e293b;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid #334155;
+    }
+
+    .btn-refresh {
+      background: #334155;
+      color: #ffffff;
+      border: none;
+      padding: 5px 12px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .btn-refresh:hover {
+      background: #475569;
+    }
+
+    /* ── Layout ── */
+    #app-container {
+      flex: 1;
+      display: flex;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #map {
+      flex: 1;
+      height: 100%;
+      background: #e2e8f0;
+    }
+
+    #sidebar {
+      width: 420px;
+      max-width: 100%;
+      height: 100%;
+      background: var(--bg-panel);
+      border-left: 2px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      z-index: 10;
+      box-shadow: -4px 0 16px rgba(0,0,0,0.06);
+      overflow-y: auto;
+    }
+
+    /* ── High Contrast Sections ── */
+    .sidebar-section {
+      padding: 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .section-title {
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* ── Metric Grid ── */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .metric-card {
+      background: #f8fafc;
+      border: 1.5px solid var(--border-color);
+      border-radius: 6px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.1s ease;
+    }
+
+    .metric-card.alert {
+      border-color: var(--danger);
+      background: var(--danger-bg);
+    }
+
+    .metric-card.success {
+      border-color: var(--primary);
+      background: #f0fdf4;
+    }
+
+    .metric-card.info {
+      border-color: var(--accent-blue);
+      background: var(--accent-blue-bg);
+    }
+
+    .metric-label {
+      font-size: 0.73rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .metric-val {
+      font-size: 1.55rem;
+      font-weight: 800;
+      color: var(--text-main);
+      margin: 4px 0 2px 0;
+      line-height: 1.1;
+    }
+
+    .metric-sub {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* ── Sparkline ── */
+    .sparkline-container {
+      background: #f8fafc;
+      border: 1.5px solid var(--border-color);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+
+    .sparkline-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .sparkline-svg {
+      width: 100%;
+      height: 48px;
+      overflow: visible;
+    }
+
+    /* ── Underserved Areas ── */
+    .gap-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .gap-item {
+      background: #ffffff;
+      border: 1.5px solid var(--border-color);
+      border-left: 4px solid var(--danger);
+      border-radius: 4px;
+      padding: 9px 12px;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .gap-item:hover {
+      background: var(--danger-bg);
+      border-color: var(--danger);
+    }
+
+    .gap-item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .gap-item-title {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .gap-item-detail {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+    }
+
+    .gap-badge {
+      background: var(--danger);
+      color: #ffffff;
+      font-size: 0.72rem;
+      font-weight: 800;
+      padding: 3px 8px;
+      border-radius: 4px;
+      text-align: right;
+    }
+
+    /* ── Map Layer Controls (Floating) ── */
+    .map-controls-floating {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(4px);
+      border: 2px solid var(--border-color);
+      border-radius: 6px;
+      padding: 10px 14px;
+      z-index: 5;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      font-size: 0.8rem;
+    }
+
+    .map-controls-title {
+      font-weight: 800;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .control-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .legend-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .legend-fires { background: #dc2626; border: 1.5px solid #991b1b; }
+    .legend-gaps { background: #fef08a; border: 2px solid #dc2626; }
+    .legend-machines { background: #0284c7; border: 1.5px solid #0369a1; }
+
+    /* ── Audit Footnote ── */
+    .footnote {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+      background: #f1f5f9;
+      border-radius: 4px;
+      padding: 10px;
+    }
+
+    /* ── Empty State ── */
+    .empty-state {
+      padding: 24px 16px;
+      text-align: center;
+      background: #f8fafc;
+      border: 1.5px dashed var(--border-color);
+      border-radius: 6px;
+      color: var(--text-muted);
+    }
+
+    .empty-state-title {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 4px;
+    }
+
+    /* ── Map Popups ── */
+    .maplibregl-popup-content {
+      padding: 12px 14px;
+      border-radius: 6px;
+      border: 1.5px solid #0f172a;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+      font-family: var(--font-family);
+      font-size: 0.8rem;
+      line-height: 1.4;
+    }
+
+    .popup-title {
+      font-weight: 800;
+      font-size: 0.88rem;
+      margin-bottom: 4px;
+      color: var(--text-main);
+    }
+
+    /* ── Mobile Responsive ── */
+    @media (max-width: 860px) {
+      body {
+        overflow: auto;
+      }
+      #app-container {
+        flex-direction: column;
+        height: auto;
+      }
+      #map {
+        height: 55vh;
+        min-height: 340px;
+      }
+      #sidebar {
+        width: 100%;
+        height: auto;
+        border-left: none;
+        border-top: 2px solid var(--border-color);
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header>
+    <div class="brand">
+      <div class="brand-title">
+        <span>🌾 Parali Mitra</span>
+        <span class="brand-sub">| Officer Residue Dashboard</span>
+        <span class="badge-live">Live</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span class="as-of-pill" id="as-of-label">Data as of: Loading...</span>
+      <button class="btn-refresh" id="btn-refresh" onclick="loadAllData()">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- Main View -->
+  <div id="app-container">
+    
+    <!-- Floating Layer Controls -->
+    <div class="map-controls-floating">
+      <div class="map-controls-title">Map Layers</div>
+      <label class="control-row">
+        <input type="checkbox" id="layer-fires" checked onchange="toggleLayer('fire-circles')">
+        <span class="legend-indicator legend-fires"></span>
+        <span>Active Fires (FIRMS)</span>
+      </label>
+      <label class="control-row">
+        <input type="checkbox" id="layer-gaps" checked onchange="toggleLayer('gap-outlines')">
+        <span class="legend-indicator legend-gaps"></span>
+        <span>Flagged Gaps (>15km)</span>
+      </label>
+      <label class="control-row">
+        <input type="checkbox" id="layer-machines" checked onchange="toggleLayer('machine-circles')">
+        <span class="legend-indicator legend-machines"></span>
+        <span>Registered Machinery</span>
+      </label>
+    </div>
+
+    <!-- Map Canvas -->
+    <div id="map"></div>
+
+    <!-- Officer Side Panel -->
+    <aside id="sidebar">
+
+      <!-- Section: Key Metrics -->
+      <div class="sidebar-section">
+        <div class="section-title">
+          <span>Regional Overview (7 Days)</span>
+          <span style="font-weight: 500; font-size: 0.72rem; color: var(--primary);">Punjab & Haryana</span>
+        </div>
+        <div class="metric-grid">
+          <div class="metric-card alert">
+            <span class="metric-label">Active Detections</span>
+            <span class="metric-val" id="metric-fires">0</span>
+            <span class="metric-sub">NASA VIIRS 375m NRT</span>
+          </div>
+          <div class="metric-card alert">
+            <span class="metric-label">Coverage Gaps</span>
+            <span class="metric-val" id="metric-gaps">0</span>
+            <span class="metric-sub">No machinery within 15 km</span>
+          </div>
+          <div class="metric-card success">
+            <span class="metric-label">Residue Managed</span>
+            <span class="metric-val" id="metric-tonnes">0 t</span>
+            <span class="metric-sub">Estimated (2.8 t/acre)</span>
+          </div>
+          <div class="metric-card info">
+            <span class="metric-label">CRM Machinery</span>
+            <span class="metric-val" id="metric-machines">0</span>
+            <span class="metric-sub" id="metric-buyers-sub">0 verified off-takers</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section: 7-Day Hotspot Sparkline -->
+      <div class="sidebar-section">
+        <div class="section-title">7-Day Fire Trend (Sparkline)</div>
+        <div class="sparkline-container">
+          <div class="sparkline-header">
+            <span id="sparkline-range">Last 7 Days</span>
+            <span id="sparkline-peak">Peak: 0 fires</span>
+          </div>
+          <svg class="sparkline-svg" id="sparkline-svg" viewBox="0 0 360 48"></svg>
+        </div>
+      </div>
+
+      <!-- Section: Top Underserved Clusters -->
+      <div class="sidebar-section" style="flex: 1;">
+        <div class="section-title">
+          <span>Top 5 Underserved Clusters</span>
+          <span style="font-size: 0.7rem; color: var(--danger); font-weight: 700;">Action Required</span>
+        </div>
+        <div id="underserved-container">
+          <ul class="gap-list" id="underserved-list"></ul>
+        </div>
+      </div>
+
+      <!-- Section: Audit Disclosure & Limitations -->
+      <div class="sidebar-section">
+        <div class="footnote">
+          <strong>Field Officer Audit Note:</strong><br>
+          • CRM machines labeled "Directory" originate from public portal seed registries. Units labeled "Verified" have registered operators.<br>
+          • Satellite detections reflect thermal anomalies (VIIRS passes ~13:30 & 01:30 IST); cloudy conditions or brief fires may not be detected.<br>
+          • Zero farmer PII is retained or served on this dashboard.
+        </div>
+      </div>
+
+    </aside>
+  </div>
+
+  <script>
+    // ── Configuration & Token Extraction ─────────────────────────────────────
+    const urlParams = new URLSearchParams(window.location.search);
+    const dashboardToken = urlParams.get('token') || '';
+
+    function getApiUrl(endpoint) {
+      const url = new URL(endpoint, window.location.origin);
+      if (dashboardToken) {
+        url.searchParams.set('token', dashboardToken);
+      }
+      return url.toString();
+    }
+
+    // ── Map Setup ────────────────────────────────────────────────────────────
+    // OpenStreetMap keyless raster style compliant with OpenStreetMap tile terms
+    const mapStyle = {
+      version: 8,
+      sources: {
+        'osm-tiles': {
+          type: 'raster',
+          tiles: [
+            'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+          ],
+          tileSize: 256,
+          attribution: '&copy; <a target="_blank" href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }
+      },
+      layers: [
+        {
+          id: 'osm-tiles-layer',
+          type: 'raster',
+          source: 'osm-tiles',
+          minzoom: 0,
+          maxzoom: 19
+        }
+      ]
+    };
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: mapStyle,
+      center: [75.8, 30.7], // Centered between Ludhiana & Patiala (Punjab/Haryana)
+      zoom: 7.5,
+      minZoom: 6,
+      maxZoom: 17
+    });
+
+    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+
+    let currentGapsData = [];
+
+    // ── Layer Toggles ────────────────────────────────────────────────────────
+    function toggleLayer(layerId) {
+      if (!map.getLayer(layerId)) return;
+      const visibility = map.getLayoutProperty(layerId, 'visibility');
+      map.setLayoutProperty(
+        layerId,
+        'visibility',
+        visibility === 'none' ? 'visible' : 'none'
+      );
+    }
+
+    // ── Fly to Underserved Area ──────────────────────────────────────────────
+    function flyToArea(lat, lon, zoom = 11) {
+      map.flyTo({
+        center: [lon, lat],
+        zoom: zoom,
+        essential: true,
+        speed: 1.4
+      });
+    }
+
+    // ── Render 7-Day Sparkline ───────────────────────────────────────────────
+    function renderSparkline(dailyCounts) {
+      const svg = document.getElementById('sparkline-svg');
+      if (!dailyCounts || dailyCounts.length === 0) {
+        svg.innerHTML = '';
+        return;
+      }
+
+      const counts = dailyCounts.map(d => d.count);
+      const maxVal = Math.max(...counts, 1);
+      const width = 360;
+      const height = 44;
+      const step = width / (counts.length - 1 || 1);
+
+      document.getElementById('sparkline-peak').textContent = `Peak: ${maxVal} fires`;
+      if (dailyCounts.length >= 2) {
+        document.getElementById('sparkline-range').textContent =
+          `${dailyCounts[0].date.slice(5)} to ${dailyCounts[dailyCounts.length - 1].date.slice(5)}`;
+      }
+
+      const points = counts.map((c, i) => {
+        const x = Math.round(i * step);
+        const y = Math.round(height - (c / maxVal) * (height - 8)) + 4;
+        return `${x},${y}`;
+      });
+
+      const polyline = `<polyline fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${points.join(' ')}" />`;
+      
+      const dots = counts.map((c, i) => {
+        const [x, y] = points[i].split(',');
+        return `<circle cx="${x}" cy="${y}" r="3" fill="#ffffff" stroke="#dc2626" stroke-width="2"><title>${dailyCounts[i].date}: ${c} fires</title></circle>`;
+      }).join('');
+
+      svg.innerHTML = polyline + dots;
+    }
+
+    // ── Load & Display Data ──────────────────────────────────────────────────
+    async function loadAllData() {
+      const btn = document.getElementById('btn-refresh');
+      btn.textContent = 'Loading...';
+      btn.disabled = true;
+
+      try {
+        const [summaryRes, firesRes, gapsRes, machinesRes] = await Promise.all([
+          fetch(getApiUrl('/api/summary?days=7')).then(r => r.json()),
+          fetch(getApiUrl('/api/fires?days=7')).then(r => r.json()),
+          fetch(getApiUrl('/api/gaps?days=7')).then(r => r.json()),
+          fetch(getApiUrl('/api/machines')).then(r => r.json())
+        ]);
+
+        // 1. Summary Cards
+        document.getElementById('metric-fires').textContent = summaryRes.total_hotspots || 0;
+        document.getElementById('metric-gaps').textContent = summaryRes.flagged_cells || 0;
+        document.getElementById('metric-tonnes').textContent = `${summaryRes.estimated_residue_tonnes_handled || 0} t`;
+        document.getElementById('metric-machines').textContent = summaryRes.verified_machines || 0;
+        document.getElementById('metric-buyers-sub').textContent = `${summaryRes.verified_buyers || 0} verified off-takers`;
+
+        const asOfDate = summaryRes.as_of ? new Date(summaryRes.as_of).toLocaleTimeString() : 'Just now';
+        document.getElementById('as-of-label').textContent = `Data as of: ${asOfDate}`;
+
+        // 2. Sparkline
+        renderSparkline(summaryRes.daily_counts || []);
+
+        // 3. Underserved Areas List
+        currentGapsData = gapsRes.gaps || [];
+        const underservedList = document.getElementById('underserved-list');
+        const topUnderserved = summaryRes.top_underserved_areas || [];
+
+        if (topUnderserved.length === 0) {
+          underservedList.innerHTML = `
+            <div class="empty-state">
+              <div class="empty-state-title">No Active Coverage Gaps</div>
+              <div>All current crop residue fire clusters have machinery within 15 km, or no fires are reported.</div>
+            </div>`;
+        } else {
+          underservedList.innerHTML = topUnderserved.map((g, idx) => {
+            const distLabel = g.nearest_machine_distance_km !== null
+              ? `${g.nearest_machine_distance_km} km away (${g.nearest_machine_district || 'Neighboring'})`
+              : 'No machinery registered';
+            return `
+              <li class="gap-item" onclick="flyToArea(${g.lat}, ${g.lon})">
+                <div class="gap-item-info">
+                  <div class="gap-item-title">#${idx + 1} Cluster ${g.grid_cell}</div>
+                  <div class="gap-item-detail">Nearest CRM: ${distLabel}</div>
+                </div>
+                <div class="gap-badge">${g.fire_count} 🔥</div>
+              </li>`;
+          }).join('');
+        }
+
+        // 4. Update Map Sources
+        updateMapData(firesRes.cells || [], gapsRes.gaps || [], machinesRes.machines || []);
+
+      } catch (err) {
+        console.error('Failed to load dashboard data:', err);
+        alert('Could not refresh dashboard data. Please check connection and authorization token.');
+      } finally {
+        btn.textContent = '↻ Refresh';
+        btn.disabled = false;
+      }
+    }
+
+    // ── Update Map GeoJSON Sources ───────────────────────────────────────────
+    function updateMapData(fireCells, gapCells, machines) {
+      // GeoJSON: Fire Clusters
+      const fireFeatures = fireCells.map(f => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [f.lon, f.lat] },
+        properties: {
+          grid_cell: f.grid_cell,
+          fire_count: f.fire_count,
+          max_frp: f.max_frp,
+          total_frp: f.total_frp
+        }
+      }));
+
+      // GeoJSON: Coverage Gaps (Flagged cells)
+      const gapFeatures = gapCells.filter(g => g.is_gap).map(g => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [g.lon, g.lat] },
+        properties: {
+          grid_cell: g.grid_cell,
+          fire_count: g.fire_count,
+          distance_km: g.nearest_machine_distance_km
+        }
+      }));
+
+      // GeoJSON: Machines
+      const machineFeatures = machines.map(m => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [m.lon, m.lat] },
+        properties: {
+          machine_id: m.machine_id,
+          machine_type: m.machine_type,
+          village: m.village,
+          district: m.district,
+          is_directory_listing: m.is_directory_listing,
+          is_synthetic: m.is_synthetic
+        }
+      }));
+
+      if (map.getSource('fires-src')) {
+        map.getSource('fires-src').setData({ type: 'FeatureCollection', features: fireFeatures });
+      }
+      if (map.getSource('gaps-src')) {
+        map.getSource('gaps-src').setData({ type: 'FeatureCollection', features: gapFeatures });
+      }
+      if (map.getSource('machines-src')) {
+        map.getSource('machines-src').setData({ type: 'FeatureCollection', features: machineFeatures });
+      }
+    }
+
+    // ── Setup Map Layers on Load ─────────────────────────────────────────────
+    map.on('load', () => {
+      // Source 1: Fires
+      map.addSource('fires-src', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+
+      // Layer: Fire Clusters (Sized & Colored by Fire Count)
+      map.addLayer({
+        id: 'fire-circles',
+        type: 'circle',
+        source: 'fires-src',
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'fire_count'],
+            1, 7,
+            5, 12,
+            20, 20
+          ],
+          'circle-color': [
+            'interpolate', ['linear'], ['get', 'fire_count'],
+            1, '#f97316',
+            5, '#ea580c',
+            15, '#dc2626'
+          ],
+          'circle-opacity': 0.85,
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#7f1d1d'
+        }
+      });
+
+      // Source 2: Flagged Gaps
+      map.addSource('gaps-src', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+
+      // Layer: Flagged Gaps (Dashed red halo outline)
+      map.addLayer({
+        id: 'gap-outlines',
+        type: 'circle',
+        source: 'gaps-src',
+        paint: {
+          'circle-radius': 24,
+          'circle-color': '#fef08a',
+          'circle-opacity': 0.25,
+          'circle-stroke-width': 2.5,
+          'circle-stroke-color': '#dc2626'
+        }
+      });
+
+      // Source 3: Machines
+      map.addSource('machines-src', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+
+      // Layer: Machine Markers
+      map.addLayer({
+        id: 'machine-circles',
+        type: 'circle',
+        source: 'machines-src',
+        paint: {
+          'circle-radius': 5.5,
+          'circle-color': '#0284c7',
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#082f49'
+        }
+      });
+
+      // ── Popups on Hover / Click ────────────────────────────────────────────
+      const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
+
+      // Hover on Fire Cluster
+      map.on('mouseenter', 'fire-circles', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const p = e.features[0].properties;
+        popup.setLngLat(e.lngLat)
+          .setHTML(`
+            <div class="popup-title">🔥 Fire Cluster (${p.grid_cell})</div>
+            <div><strong>Active Fires:</strong> ${p.fire_count}</div>
+            <div><strong>Peak FRP:</strong> ${p.max_frp} MW</div>
+            <div><strong>Total FRP:</strong> ${p.total_frp} MW</div>
+          `).addTo(map);
+      });
+      map.on('mouseleave', 'fire-circles', () => {
+        map.getCanvas().style.cursor = '';
+        popup.remove();
+      });
+
+      // Hover on Machine Marker
+      map.on('mouseenter', 'machine-circles', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const p = e.features[0].properties;
+        const badge = p.is_directory_listing ? 'Directory Listing' : 'Verified Hub';
+        popup.setLngLat(e.lngLat)
+          .setHTML(`
+            <div class="popup-title">🚜 ${p.machine_type.replace('_', ' ')}</div>
+            <div><strong>Village:</strong> ${p.village}, ${p.district}</div>
+            <div><strong>Status:</strong> ${badge}</div>
+          `).addTo(map);
+      });
+      map.on('mouseleave', 'machine-circles', () => {
+        map.getCanvas().style.cursor = '';
+        popup.remove();
+      });
+
+      // Hover on Gap
+      map.on('mouseenter', 'gap-outlines', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const p = e.features[0].properties;
+        popup.setLngLat(e.lngLat)
+          .setHTML(`
+            <div class="popup-title" style="color: #dc2626;">⚠️ Coverage Gap (${p.grid_cell})</div>
+            <div><strong>Fires:</strong> ${p.fire_count}</div>
+            <div><strong>Nearest CRM:</strong> ${p.distance_km ? p.distance_km + ' km' : 'None within range'}</div>
+          `).addTo(map);
+      });
+      map.on('mouseleave', 'gap-outlines', () => {
+        map.getCanvas().style.cursor = '';
+        popup.remove();
+      });
+
+      // Initial Data Load
+      loadAllData();
+    });
+  </script>
+</body>
+</html>
