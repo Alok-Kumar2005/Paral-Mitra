@@ -46,9 +46,10 @@ Every autumn post-harvest season, millions of tonnes of paddy straw (*parali*) a
 * **Text-to-Speech (TTS):** Generates natural voice responses using **Amazon Polly** Neural voices (`Aditi` for Hindi, `Kajal` for Indian English).
 * **Privacy-First:** Audio files are stored ephemerally in S3 and deleted immediately post-transcription.
 
-### 4. Verified Two-Sided Marketplace
-* Connects farmers directly with Custom Hiring Centres (CHCs) and industrial biomass buyers.
-* Multi-actor booking state machine with operator notification (`PENDING_CONFIRMATION`), inline accept/decline flows, status tracking (`/status`, `/bookings`), and 1–5 star rating feedback loops.
+### 4. Verified Two-Sided Marketplace & Open Lender Network
+* Connects farmers directly with Custom Hiring Centres (CHCs), industrial biomass buyers, and **peer-to-peer equipment lenders (`/lend`)**.
+* Multi-actor booking state machine with operator notification (`PENDING_CONFIRMATION`), inline accept/decline flows, status tracking (`/status`, `/mybookings`), and 1–5 star rating feedback loops.
+* **Peer-to-Peer Lender Feature (`/lend`):** Any local farmer or machine owner can list idle tractors/seeders with phone verification, rate guardrails, and admin review (`/admin`).
 
 ### 5. Officer Dashboard & Spatial Intelligence
 * Integrates real-time active fire hotspot telemetry from **NASA FIRMS (VIIRS NRT)**.
@@ -103,7 +104,7 @@ Paral-Mitra/
 ├── requirements.txt          # Python dependencies lockfile
 ├── .env.example              # Sample environment variable template
 ├── db/
-│   └── migrations/           # Idempotent numbered SQL migrations (0001_init.sql)
+│   └── migrations/           # Idempotent numbered SQL migrations (0001_init to 0004_lender)
 ├── infra/
 │   └── template.yaml         # AWS SAM CloudFormation infrastructure template
 ├── src/
@@ -122,41 +123,55 @@ Paral-Mitra/
 │   │   ├── tools.py          # Strict typed tool adapters over engine and connectors
 │   │   ├── memory.py         # Session history persistence (sliding window)
 │   │   └── prompts.py        # Trilingual empathetic system prompts
-│   ├── bot/                  # Telegram webhook parsing, keyboards & i18n
+│   ├── bot/                  # Telegram webhook parsing, keyboards, flows & i18n
 │   │   ├── router.py         # Update deduplication & conversational dispatcher
 │   │   ├── keyboards.py      # Location request and interactive inline keyboards
 │   │   ├── i18n.py           # Trilingual string catalogs (Hindi, Punjabi, English)
+│   │   ├── flows/            # Modular state machine dialog flows
+│   │   │   ├── farmer.py     # Farmer onboarding, /options, and /machines
+│   │   │   ├── lender.py     # P2P equipment owner registration wizard (/lend)
+│   │   │   ├── owner.py      # CHC operator and industrial straw buyer portal (/owner)
+│   │   │   ├── admin.py      # Provider verification and approval (/admin)
+│   │   │   └── booking.py    # Two-sided booking loop & ratings
 │   │   └── local_polling.py  # Local getUpdates development runner (no webhook needed)
 │   ├── handlers/             # AWS Lambda entry points
 │   │   ├── receiver.py       # Ultra-lean webhook validator & SQS enqueuer
 │   │   ├── worker.py         # Asynchronous update processor & agent orchestrator
 │   │   ├── sweeper.py        # 24-hour unacknowledged booking expiry sweeper
-│   │   └── dashboard_api.py  # Officer dashboard HTML renderer & JSON API handler
+│   │   └── api.py            # Officer dashboard HTML renderer & JSON API handler
 │   └── common/               # Shared models, Neon PostgreSQL client & typed constants
 ├── data/
 │   └── seed/                 # Ground truth data (verified CHCs, buyers, statutory rates)
 ├── scripts/                  # Management, migration, seeding & deployment scripts
 │   ├── migrate.py            # Execute pending PostgreSQL migrations
 │   ├── seed.py               # Ingest CSV registries into PostgreSQL
+│   ├── build_lambda.py       # Cross-compile arm64 Lambda dependency wheels
 │   ├── deploy.py             # One-command AWS SAM deployment helper
 │   ├── set_webhook.py        # Register Telegram webhook with API secret token
 │   └── db_check.py           # Database connectivity & latency diagnostics
-└── tests/                    # Comprehensive Pytest suite (50+ unit & contract tests)
+└── tests/                    # Comprehensive Pytest suite (190+ unit & contract tests)
 ```
 
 ---
 
 ## 💬 Bot Commands & Interactions
 
-| Command | Description |
-| :--- | :--- |
-| `/start` | Welcome onboarding, language selection (हिन्दी / ਪੰਜਾਬੀ / English), and location sharing |
-| `/options` | Evaluate and rank tailored in-situ and ex-situ residue clearance solutions |
-| `/book` | Initiate a booking request for custom hiring machinery or straw off-taker |
-| `/status` | View real-time status of submitted booking requests |
-| `/bookings` | List active and historical equipment reservations |
-| `/language` | Switch preferred language between Hindi, Punjabi, and English at any time |
-| `/help` | Explanations of government residue subsidies, machinery types, and guidelines |
+| Command | Category | Description |
+| :--- | :--- | :--- |
+| `/start` | Farmer | Welcome onboarding, language selection (हिन्दी / ਪੰਜਾਬੀ / English), and location sharing |
+| `/options` | Farmer | Calculate deterministically ranked residue solutions (costs, deadlines & earnings) |
+| `/machines` | Farmer | Browse nearby verified machinery with lender badges, star ratings, and terms |
+| `/mybookings` | Farmer / Operator | View real-time status of submitted requests or incoming operator jobs |
+| `/lend` | P2P Owner | List idle equipment for nearby farmers with phone verification and rate guardrails |
+| `/owner` | CHC / Buyer | Portal for registered Custom Hiring Centres and industrial straw off-takers |
+| `/admin` | Administrator | Review and approve/reject pending provider and lender registrations |
+| `/language` | General | Switch preferred language between Hindi, Punjabi, and English at any time |
+| `/status` | Farmer | View profile overview (farm acreage, sowing deadline, location coordinates) |
+| `/reset` | Farmer | Reset farm parameters to start optimization afresh |
+| `/forget_me` | Privacy | GDPR-compliant permanent deletion of all personal data from the database |
+| `/help` | General | Display commands guide and helpline information |
+
+Farmers can also **send voice notes** in their native dialect or **type naturally** in Hindi, Punjabi, or English.
 
 Farmers can also **send voice notes** in their native dialect or **type naturally** in Hindi, Punjabi, or English.
 
