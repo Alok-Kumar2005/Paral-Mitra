@@ -1073,12 +1073,12 @@ class PostgresClient(DatabaseClient):
                 INSERT INTO providers (
                     provider_id, provider_type, name, contact_phone, telegram_chat_id,
                     district, state, lat, lon, status, verified_by, verified_at,
-                    is_directory_listing, created_at
+                    is_directory_listing, phone_verified, created_at
                 ) VALUES (
                     %(provider_id)s, %(provider_type)s, %(name)s, %(contact_phone)s,
                     %(telegram_chat_id)s, %(district)s, %(state)s, %(lat)s, %(lon)s,
                     %(status)s, %(verified_by)s, %(verified_at)s,
-                    %(is_directory_listing)s, %(created_at)s
+                    %(is_directory_listing)s, %(phone_verified)s, %(created_at)s
                 )
                 ON CONFLICT (provider_id) DO UPDATE SET
                     name                 = EXCLUDED.name,
@@ -1089,7 +1089,8 @@ class PostgresClient(DatabaseClient):
                     lat                  = EXCLUDED.lat,
                     lon                  = EXCLUDED.lon,
                     status               = EXCLUDED.status,
-                    is_directory_listing = EXCLUDED.is_directory_listing
+                    is_directory_listing = EXCLUDED.is_directory_listing,
+                    phone_verified       = EXCLUDED.phone_verified
                 """,
                 {
                     "provider_id": provider.provider_id,
@@ -1107,6 +1108,7 @@ class PostgresClient(DatabaseClient):
                     "verified_by": provider.verified_by,
                     "verified_at": provider.verified_at,
                     "is_directory_listing": provider.is_directory_listing,
+                    "phone_verified": provider.phone_verified,
                     "created_at": provider.created_at,
                 },
             )
@@ -1174,12 +1176,12 @@ class PostgresClient(DatabaseClient):
                     machine_id, provider_id, machine_type, village, district,
                     lat, lon, rate_per_acre, travel_charge_per_km, service_radius_km,
                     available_from, blocked_dates, status, rating_avg, rating_count,
-                    source, is_synthetic
+                    source, is_synthetic, terms_note
                 ) VALUES (
                     %(machine_id)s, %(provider_id)s, %(machine_type)s, %(village)s, %(district)s,
                     %(lat)s, %(lon)s, %(rate_per_acre)s, %(travel_charge_per_km)s, %(service_radius_km)s,
                     %(available_from)s, %(blocked_dates)s, %(status)s, %(rating_avg)s, %(rating_count)s,
-                    %(source)s, %(is_synthetic)s
+                    %(source)s, %(is_synthetic)s, %(terms_note)s
                 )
                 ON CONFLICT (machine_id) DO UPDATE SET
                     provider_id          = EXCLUDED.provider_id,
@@ -1195,7 +1197,8 @@ class PostgresClient(DatabaseClient):
                     blocked_dates        = EXCLUDED.blocked_dates,
                     status               = EXCLUDED.status,
                     source               = EXCLUDED.source,
-                    is_synthetic         = EXCLUDED.is_synthetic
+                    is_synthetic         = EXCLUDED.is_synthetic,
+                    terms_note           = EXCLUDED.terms_note
                 """,
                 {
                     "machine_id": machine.machine_id,
@@ -1217,6 +1220,7 @@ class PostgresClient(DatabaseClient):
                     "rating_count": machine.rating_count,
                     "source": machine.source,
                     "is_synthetic": machine.is_synthetic,
+                    "terms_note": machine.terms_note,
                 },
             )
 
@@ -1745,6 +1749,8 @@ def _machine_from_row(d: dict[str, Any]) -> Machine:
     # owner_name / owner_phone not stored in machines table; default to empty
     d.setdefault("owner_name", "")
     d.setdefault("owner_phone", "")
+    # terms_note is nullable; default to None for legacy rows
+    d.setdefault("terms_note", None)
     return Machine.model_validate(d)
 
 

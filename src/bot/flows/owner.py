@@ -124,16 +124,22 @@ async def handle_owner_text_input(
 
         elif flow.step == "LOCATION":
             loc_text = text.strip()
-            # Geocode
-            lat, lon, district, state = 30.3753, 76.1517, "Patiala", "Punjab"
+            gc = None
             try:
                 gc = await Geocoder().geocode(loc_text)
-                if gc:
-                    lat, lon = gc.lat, gc.lon
-                    district = gc.district or district
-                    state = gc.state or state
             except Exception:
                 pass
+
+            if not gc or gc.lat is None or gc.lon is None:
+                await telegram_client.send_message(
+                    chat_id,
+                    "❌ Could not find that location. Please try again with a specific village and district (e.g. Nabha, Patiala):",
+                )
+                return True
+
+            lat, lon = gc.lat, gc.lon
+            district = gc.district or "Patiala"
+            state = gc.state or "Punjab"
 
             p_id = f"PRV_{secrets.token_hex(3).upper()}"
             p_type = flow.data.get("type", "CHC")

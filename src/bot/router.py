@@ -8,7 +8,7 @@ from typing import Any
 
 from src.agent.agent import run_agent_turn  # imported here so tests can monkeypatch
 from src.bot import tts_handler, voice_handler
-from src.bot.flows import admin, booking, farmer, owner
+from src.bot.flows import admin, booking, farmer, lender, owner
 from src.bot.telegram_client import TelegramClient
 from src.bot.voice_config import POLLY_VOICES
 from src.common.db import DatabaseClient, get_db_client
@@ -77,7 +77,11 @@ async def _route_callback_query(
     elif data.startswith("adm_"):
         await admin.handle_admin_callback(data, chat_id, db, telegram_client, lang=lang)
     elif data.startswith("own_") or data.startswith("mch_type:"):
-        await owner.handle_owner_callback(data, chat_id, db, telegram_client, lang=lang)
+        flow = db.get_chat_flow(chat_id)
+        if flow and flow.flow == "LEND":
+            await lender.handle_lender_callback(data, chat_id, db, telegram_client, flow, lang=lang)
+        else:
+            await owner.handle_owner_callback(data, chat_id, db, telegram_client, lang=lang)
     elif (
         data.startswith("bk_")
         or data.startswith("book_opt:")
@@ -105,8 +109,34 @@ async def _route_message(
         session = FarmerSession(chat_id=chat_id, language="hi")
         db.put_session(session)
 
+    flow = db.get_chat_flow(chat_id)
+
+    # Contact attachment — only handled when chat is in LEND flow at CONTACT step
+    if "contact" in msg:
+        if flow and flow.flow == "LEND" and flow.step == "CONTACT":
+            await lender.handle_lender_contact_input(
+                msg=msg,
+                chat_id=chat_id,
+                db=db,
+                telegram_client=telegram_client,
+                flow=flow,
+                lang=session.language or "hi",
+            )
+        return
+
     # 1. Location Pin attachment — save lat/lon then invoke agent via router-level run_agent_turn
     if "location" in msg:
+        if flow and flow.flow == "LEND" and flow.step == "LOCATION":
+            await lender.handle_lender_location_input(
+                msg=msg,
+                chat_id=chat_id,
+                db=db,
+                telegram_client=telegram_client,
+                flow=flow,
+                lang=session.language or "hi",
+            )
+            return
+
         loc = msg["location"]
         lat = loc.get("latitude", 0.0)
         lon = loc.get("longitude", 0.0)
@@ -160,19 +190,30 @@ async def _route_message(
     if not text:
         return
 
-    # Check if user is in an active interactive chat flow (e.g. owner registration)
-    flow = db.get_chat_flow(chat_id)
-    if flow and not text.startswith("/"):
-        handled = await owner.handle_owner_text_input(
-            text=text,
-            chat_id=chat_id,
-            db=db,
-            telegram_client=telegram_client,
-            flow=flow,
-            lang=session.language or "hi",
-        )
-        if handled:
-            return
+    # Check if user is in an active interactive chat flow (e.g. owner or lender registration)
+    if flow:
+        if flow.flow == "LEND":
+            handled = await lender.handle_lender_text_input(
+                text=text,
+                chat_id=chat_id,
+                db=db,
+                telegram_client=telegram_client,
+                flow=flow,
+                lang=session.language or "hi",
+            )
+            if handled:
+                return
+        elif not text.startswith("/"):
+            handled = await owner.handle_owner_text_input(
+                text=text,
+                chat_id=chat_id,
+                db=db,
+                telegram_client=telegram_client,
+                flow=flow,
+                lang=session.language or "hi",
+            )
+            if handled:
+                return
 
     # Command routing
     cmd = text.split()[0].lower()
@@ -190,6 +231,8 @@ async def _route_message(
         await farmer.handle_forget_me(chat_id, db, telegram_client, lang=session.language or "hi")
     elif cmd == "/owner":
         await owner.handle_owner_command(text, chat_id, db, telegram_client, lang=session.language or "hi")
+    elif cmd == "/lend":
+        await lender.handle_lend_command(chat_id, db, telegram_client, lang=session.language or "hi")
     elif cmd == "/admin":
         await admin.handle_admin_command(chat_id, db, telegram_client, lang=session.language or "en")
     elif cmd == "/mymachines":

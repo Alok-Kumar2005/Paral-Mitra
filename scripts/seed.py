@@ -69,6 +69,8 @@ def load_and_validate_machines(
             # Normalize optional fields
             if clean_row.get("owner_telegram_chat_id") == "":
                 clean_row["owner_telegram_chat_id"] = None
+            if clean_row.get("terms_note") == "":
+                clean_row["terms_note"] = None
             if "is_synthetic" in clean_row:
                 clean_row["is_synthetic"] = clean_row["is_synthetic"].lower() in ("true", "1", "yes")
 

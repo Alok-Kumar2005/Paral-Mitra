@@ -55,6 +55,19 @@ def get_location_keyboard(lang: str = "hi") -> dict[str, Any]:
     }
 
 
+def get_contact_keyboard(lang: str = "hi") -> dict[str, Any]:
+    """One-tap reply keyboard requesting user's contact phone number."""
+    from src.bot.i18n import t
+    btn_text = t("lend_share_contact_btn", lang)
+    return {
+        "keyboard": [
+            [{"text": btn_text, "request_contact": True}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
 def get_remove_keyboard() -> dict[str, Any]:
     """Hides active custom reply keyboard."""
     return {"remove_keyboard": True}

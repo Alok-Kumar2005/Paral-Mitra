@@ -149,6 +149,131 @@ def register_provider(
     return provider, notifications
 
 
+def register_lender(
+    db: DatabaseClient,
+    provider_id: str,
+    name: str,
+    contact_phone: str,
+    district: str,
+    state: str,
+    lat: float,
+    lon: float,
+    telegram_chat_id: int | str,
+    machine_type: str,
+    rate_per_acre: float,
+    travel_charge_per_km: float,
+    service_radius_km: float,
+    terms_note: str | None = None,
+    phone_verified: bool = False,
+    admin_chat_ids: list[int] | None = None,
+) -> tuple[Provider, object, list[Notification]]:
+    """Register an individual lender (farmer/shopkeeper/owner) with their first machine.
+
+    Rules enforced:
+      - One provider per Telegram account.
+      - contact_phone must be unique across providers.
+      - Machine rate must lie within lender_min_rate_per_acre .. lender_max_rate_per_acre.
+    Returns (provider, machine, notifications).
+    """
+    from src.common.constants import get_constants
+
+    # One provider per account
+    existing = db.get_provider_by_chat_id(telegram_chat_id)
+    if existing:
+        raise ValueError(f"Telegram account already registered as provider {existing.provider_id}.")
+
+    # Unique phone across providers
+    for p in db.list_providers():
+        if p.contact_phone == contact_phone:
+            raise ValueError("A provider with that phone number already exists.")
+
+    # Rate bounds
+    try:
+        constants = get_constants()
+        lo = constants.lender_min_rate_per_acre
+        hi = constants.lender_max_rate_per_acre
+        if lo is not None and rate_per_acre < lo:
+            raise ValueError(f"Rate ₹{rate_per_acre}/acre is below minimum ₹{lo}/acre.")
+        if hi is not None and rate_per_acre > hi:
+            raise ValueError(f"Rate ₹{rate_per_acre}/acre exceeds maximum ₹{hi}/acre.")
+    except ImportError:
+        pass  # constants not loaded; skip bound check
+
+    provider = Provider(
+        provider_id=provider_id,
+        provider_type=ProviderType.LENDER,
+        name=name.strip(),
+        contact_phone=contact_phone.strip(),
+        telegram_chat_id=str(telegram_chat_id),
+        district=district.strip(),
+        state=state.strip(),
+        lat=lat,
+        lon=lon,
+        status=ProviderStatus.PENDING,
+        phone_verified=phone_verified,
+        created_at=_utc_now(),
+    )
+    db.put_provider(provider)
+    logger.info("[Marketplace] Lender registered: provider_id=%s", provider_id)
+
+    m_id = f"MCH_{secrets.token_hex(3).upper()}"
+    machine = Machine(
+        machine_id=m_id,
+        provider_id=provider_id,
+        machine_type=machine_type,
+        village=district.strip(),
+        district=district.strip(),
+        lat=lat,
+        lon=lon,
+        rate_per_acre=rate_per_acre,
+        travel_charge_per_km=travel_charge_per_km,
+        service_radius_km=service_radius_km,
+        available_from=_utc_now().date(),
+        blocked_dates=[],
+        status="ACTIVE",
+        rating_avg=None,
+        rating_count=0,
+        source="LENDER",
+        is_synthetic=False,
+        terms_note=terms_note[:160] if terms_note else None,
+    )
+    db.put_machine(machine)
+    logger.info("[Marketplace] Lender machine created: machine_id=%s", m_id)
+
+    notifications: list[Notification] = []
+    phone_verified_label = "YES" if phone_verified else "NO"
+    admins = admin_chat_ids or [
+        int(x.strip())
+        for x in os.getenv("ADMIN_CHAT_IDS", "").split(",")
+        if x.strip().isdigit()
+    ]
+    for admin_cid in admins:
+        notifications.append(
+            Notification(
+                chat_id=admin_cid,
+                text=(
+                    f"🧑\u200d🌾 *New LENDER (individual) Registration*\n\n"
+                    f"ID: `{provider.provider_id}`\n"
+                    f"Name: *{provider.name}*\n"
+                    f"District: *{provider.district}, {provider.state}*\n"
+                    f"Machine: *{machine_type}* @ ₹{rate_per_acre}/acre\n"
+                    f"Phone verified via Telegram contact: *{phone_verified_label}*\n"
+                    f"Status: *PENDING*"
+                ),
+                reply_markup={
+                    "inline_keyboard": [
+                        [
+                            {"text": "✅ Approve", "callback_data": f"adm_app:{provider.provider_id}"},
+                            {"text": "❌ Reject", "callback_data": f"adm_rej:{provider.provider_id}"},
+                        ]
+                    ]
+                },
+            )
+        )
+
+    return provider, machine, notifications
+
+
 def approve_provider(
     db: DatabaseClient,
     provider_id: str,
@@ -270,6 +395,15 @@ def add_machine(
         source="MARKETPLACE",
         is_synthetic=False,
     )
+    # Enforce max 5 machines for LENDER providers
+    provider_rec = db.get_provider(provider_id) if provider_id else None
+    if provider_rec:
+        ptype = provider_rec.provider_type
+        ptype_val = ptype.value if hasattr(ptype, "value") else str(ptype)
+        if ptype_val == "LENDER":
+            existing_count = len(db.list_machines_by_provider(provider_id))
+            if existing_count >= 5:
+                raise ValueError(f"LENDER providers may register at most 5 machines (currently {existing_count}).")
     db.put_machine(machine)
     logger.info("[Marketplace] Machine added: machine_id=%s for provider=%s", machine_id, provider_id)
     return machine, []
@@ -400,18 +534,23 @@ def list_nearby_machines(
     lon: float,
     radius_km: float = 50.0,
 ) -> list[PublicMachineView]:
-    """Return sanitized public machine views within radius with distance calculation."""
+    """Return sanitized public machine views within radius with distance calculation.
+
+    Includes 🧑\u200d🌾 Lender badge, rating string, and terms_note for lender machines.
+    """
     machines = db.list_bookable_machines(lat=lat, lon=lon, radius_km=radius_km)
     results: list[PublicMachineView] = []
     for m in machines:
         dist = round(_haversine_km(lat, lon, m.lat, m.lon), 1)
         p_name = m.owner_name or "Verified CHC"
         p_status = ProviderStatus.VERIFIED
+        p_type: ProviderType | str = ProviderType.CHC
         if m.provider_id:
             p = db.get_provider(m.provider_id)
             if p:
                 p_name = p.name
                 p_status = p.status
+                p_type = p.provider_type
         results.append(
             PublicMachineView(
                 machine_id=m.machine_id,
@@ -424,8 +563,10 @@ def list_nearby_machines(
                 rating_avg=m.rating_avg,
                 rating_count=m.rating_count,
                 provider_name=p_name,
+                provider_type=p_type,
                 provider_status=p_status,
                 distance_km=dist,
+                terms_note=m.terms_note,
             )
         )
     return sorted(results, key=lambda x: x.distance_km or 0.0)

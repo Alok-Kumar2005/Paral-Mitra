@@ -237,6 +237,17 @@ async def find_residue_options(chat_id: int) -> dict[str, Any]:
     # Prepare compact top 3 feasible options
     top_feasible = []
     for idx, opt in enumerate(ranking.feasible[:3], start=1):
+        badge = "CHC"
+        rating_str = None
+        terms_note = None
+        m = db.get_machine(opt.target_id)
+        if m and m.provider_id:
+            p = db.get_provider(m.provider_id)
+            if p and (p.provider_type == "LENDER" or getattr(p.provider_type, "value", "") == "LENDER"):
+                badge = "🧑‍🌾 Lender"
+                rating_str = f"⭐ {m.rating_avg:.1f} ({m.rating_count})" if (m.rating_count and m.rating_avg) else "New lender, no ratings yet"
+                terms_note = m.terms_note
+
         top_feasible.append({
             "option_index": idx,
             "type": str(opt.option_type.value if hasattr(opt.option_type, "value") else opt.option_type),
@@ -249,6 +260,9 @@ async def find_residue_options(chat_id: int) -> dict[str, Any]:
             "earliest_date": opt.earliest_date.isoformat(),
             "completion_date": opt.completion_date.isoformat(),
             "slack_days": opt.slack_days,
+            "provider_badge": badge,
+            "rating_str": rating_str,
+            "terms_note": terms_note,
             "summary": opt.reasons[0] if opt.reasons else "",
         })
 
@@ -290,15 +304,28 @@ def list_nearby_machines(chat_id: int, radius_km: float = 50.0) -> dict[str, Any
     views = services.list_nearby_machines(db, lat=lat, lon=lon, radius_km=radius_km)
     results = []
     for v in views[:10]:
+        is_lender = (
+            v.provider_type == "LENDER"
+            or getattr(v.provider_type, "value", "") == "LENDER"
+        )
+        badge = "🧑‍🌾 Lender" if is_lender else "CHC"
+        if is_lender:
+            rating_str = f"⭐ {v.rating_avg:.1f} ({v.rating_count})" if (v.rating_count and v.rating_avg) else "New lender, no ratings yet"
+        else:
+            rating_str = f"⭐ {v.rating_avg:.1f} ({v.rating_count})" if v.rating_avg else "New"
+
         results.append({
             "machine_id": v.machine_id,
             "type": str(v.machine_type.value if hasattr(v.machine_type, "value") else v.machine_type),
             "provider_name": v.provider_name,
+            "provider_badge": badge,
             "location": f"{v.village}, {v.district}",
             "distance_km": v.distance_km,
             "rate_per_acre_inr": v.rate_per_acre,
+            "rating_str": rating_str,
             "rating_avg": v.rating_avg,
             "rating_count": v.rating_count,
+            "terms_note": v.terms_note,
         })
     return {
         "status": "success",

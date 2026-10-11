@@ -221,12 +221,23 @@ async def handle_machines_command(
 
     lines = [f"{t('nearby_machines_header', lang, radius_km=50)}\n"]
     for idx, v in enumerate(views[:10]):
-        rating_str = f"⭐ {v.rating_avg:.1f} ({v.rating_count})" if v.rating_avg else "New"
+        is_lender = (
+            v.provider_type == "LENDER"
+            or getattr(v.provider_type, "value", "") == "LENDER"
+        )
+        if is_lender:
+            badge = f"🧑‍🌾 Lender: *{v.provider_name}*"
+            rating_str = f"⭐ {v.rating_avg:.1f} ({v.rating_count})" if (v.rating_count and v.rating_avg) else "New lender, no ratings yet"
+        else:
+            badge = f"CHC: *{v.provider_name}*"
+            rating_str = f"⭐ {v.rating_avg:.1f} ({v.rating_count})" if v.rating_avg else "New"
+
         dist_str = f" • {v.distance_km} km away" if v.distance_km is not None else ""
+        terms_str = f"\n   📝 _{v.terms_note}_" if v.terms_note else ""
         lines.append(
             f"*{idx + 1}. {v.machine_type}* [`{v.machine_id}`]\n"
-            f"   CHC: *{v.provider_name}* ({v.village}, {v.district}{dist_str})\n"
-            f"   Rate: *₹{v.rate_per_acre:,.0f}/acre* | Rating: {rating_str}\n"
+            f"   {badge} ({v.village}, {v.district}{dist_str})\n"
+            f"   Rate: *₹{v.rate_per_acre:,.0f}/acre* | Rating: {rating_str}{terms_str}\n"
         )
     lines.append("💡 Type `/options` for custom cost-optimization based on your acreage.")
     await telegram_client.send_message(chat_id, "\n".join(lines))

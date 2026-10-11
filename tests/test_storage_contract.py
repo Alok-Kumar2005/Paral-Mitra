@@ -405,3 +405,18 @@ def test_prune_expired(db: DatabaseClient) -> None:
     # Expired hotspot should be gone
     active_hotspots = db.list_hotspots()
     assert not any(h.grid_cell == "PRUNE_G1" for h in active_hotspots)
+
+
+def test_migration_idempotent(db: DatabaseClient) -> None:
+    """Verify that all SQL migrations can be executed a second time with zero errors."""
+    if not hasattr(db, "_get_conn"):
+        return  # In-memory backend has no raw SQL migrations
+
+    migrations_dir = (
+        __import__("pathlib").Path(__file__).resolve().parents[1] / "db" / "migrations"
+    )
+    conn = db._get_conn()
+    with conn.transaction():
+        for mf in sorted(migrations_dir.glob("*.sql")):
+            conn.execute(mf.read_text(encoding="utf-8"))
+

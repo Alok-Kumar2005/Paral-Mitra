@@ -404,3 +404,103 @@ async def test_router_options_command_cached(mock_db: InMemoryDatabase, mock_cli
     assert "Super Seeder CHC" in mock_client.sent_messages[0]["text"]
     assert "inline_keyboard" in mock_client.sent_messages[0]["reply_markup"]
 
+
+@pytest.mark.asyncio
+async def test_router_lend_contact_other_user_rejected(mock_db: InMemoryDatabase, mock_client: RecordingTelegramClient) -> None:
+    chat_id = 7001
+    # 1. Initiate /lend
+    await handle_update({
+        "update_id": 3001,
+        "message": {"message_id": 1, "chat": {"id": chat_id}, "text": "/lend"},
+    }, client=mock_client, db=mock_db)
+
+    flow = mock_db.get_chat_flow(chat_id)
+    assert flow is not None
+    assert flow.flow == "LEND"
+    assert flow.step == "CONTACT"
+
+    # 2. Send contact from different user
+    await handle_update({
+        "update_id": 3002,
+        "message": {
+            "message_id": 2,
+            "chat": {"id": chat_id},
+            "contact": {"phone_number": "+919876543210", "user_id": 99999},  # mismatch!
+        },
+    }, client=mock_client, db=mock_db)
+
+    # Should reject and remain on CONTACT step
+    flow = mock_db.get_chat_flow(chat_id)
+    assert flow.step == "CONTACT"
+    assert any("own" in m["text"].lower() or "अपना" in m["text"] for m in mock_client.sent_messages)
+
+
+@pytest.mark.asyncio
+async def test_router_lend_typed_phone_fallback(mock_db: InMemoryDatabase, mock_client: RecordingTelegramClient) -> None:
+    chat_id = 7002
+    await handle_update({
+        "update_id": 3003,
+        "message": {"message_id": 1, "chat": {"id": chat_id}, "text": "/lend"},
+    }, client=mock_client, db=mock_db)
+
+    # User types fallback phone
+    await handle_update({
+        "update_id": 3004,
+        "message": {"message_id": 2, "chat": {"id": chat_id}, "text": "9876543210"},
+    }, client=mock_client, db=mock_db)
+
+    flow = mock_db.get_chat_flow(chat_id)
+    assert flow.step == "NAME"
+    assert flow.data["phone"] == "9876543210"
+    assert flow.data["phone_verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_router_lend_typed_coordinates_and_geocode_retry(mock_db: InMemoryDatabase, mock_client: RecordingTelegramClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    chat_id = 7003
+    from src.common.models import ChatFlow
+    # Place flow directly at LOCATION step
+    mock_db.put_chat_flow(ChatFlow(
+        chat_id=chat_id,
+        flow="LEND",
+        step="LOCATION",
+        data={"name": "Kisan Trader", "phone": "9812345678", "phone_verified": False},
+    ))
+
+    # Test geocode failure: mock Geocoder to return None
+    from src.connectors.geocode import Geocoder
+    async def mock_geocode_none(self, text: str):
+        return None
+    monkeypatch.setattr(Geocoder, "geocode", mock_geocode_none)
+
+    await handle_update({
+        "update_id": 3005,
+        "message": {"message_id": 1, "chat": {"id": chat_id}, "text": "UnfindableNonexistentPlace999"},
+    }, client=mock_client, db=mock_db)
+
+    # Must ask again, never default to Patiala
+    flow = mock_db.get_chat_flow(chat_id)
+    assert flow.step == "LOCATION"
+    assert any("not find" in m["text"].lower() or "नहीं मिला" in m["text"] for m in mock_client.sent_messages)
+
+    # Now provide typed coordinates "30.41, 76.47"
+    async def mock_geocode_coords(self, text: str):
+        class GC:
+            lat = 30.41
+            lon = 76.47
+            district = "Patiala"
+            state = "Punjab"
+        return GC()
+    monkeypatch.setattr(Geocoder, "geocode", mock_geocode_coords)
+
+    await handle_update({
+        "update_id": 3006,
+        "message": {"message_id": 2, "chat": {"id": chat_id}, "text": "30.41, 76.47"},
+    }, client=mock_client, db=mock_db)
+
+    flow = mock_db.get_chat_flow(chat_id)
+    assert flow.step == "MACHINE_TYPE"
+    assert flow.data["lat"] == 30.41
+    assert flow.data["lon"] == 76.47
+
+

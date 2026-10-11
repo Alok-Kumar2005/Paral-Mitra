@@ -33,6 +33,9 @@ class AgriculturalConstants(BaseModel):
     mulcher_speed_acres_per_hour: float = Field(..., description="Mulcher throughput in acres/hour")
     max_search_radius_km: float = Field(..., description="Max radial search threshold in km")
     default_transport_cost_per_tonne_km: float = Field(..., description="Transport cost in INR/tonne-km")
+    # Optional lender rate bounds (TODO verify with agronomists)
+    lender_min_rate_per_acre: float | None = Field(default=None, description="Min acceptable rate/acre for individual lenders")
+    lender_max_rate_per_acre: float | None = Field(default=None, description="Max acceptable rate/acre for individual lenders")
 
     REQUIRED_KEYS: ClassVar[set[str]] = {
         "residue_tonnes_per_acre",
@@ -92,7 +95,13 @@ class AgriculturalConstants(BaseModel):
                 "All parameters must be explicitly defined."
             )
 
-        return cls(**{k: raw_data[k] for k in cls.REQUIRED_KEYS})
+        # Build constructor kwargs: required keys + any optional extras present
+        optional_keys = {"lender_min_rate_per_acre", "lender_max_rate_per_acre"}
+        kwargs: dict[str, float | None] = {k: raw_data[k] for k in cls.REQUIRED_KEYS}
+        for k in optional_keys:
+            if k in raw_data:
+                kwargs[k] = raw_data[k]
+        return cls(**kwargs)
 
 
 _DEFAULT_CSV_PATH = Path(__file__).resolve().parents[2] / "data" / "seed" / "constants.csv"

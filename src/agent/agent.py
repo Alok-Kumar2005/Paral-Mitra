@@ -209,8 +209,12 @@ def _format_ranking_response(
     ranking: Any,
     session: FarmerSession,
     is_ex_situ_only: bool = False,
+    db: DatabaseClient | None = None,
 ) -> str:
     """Formats a RankingResult into a Telegram-ready message string."""
+    from src.bot.i18n import t
+
+    lang = session.language or "hi"
     feasible = list(ranking.feasible)
     deadline_str = session.sowing_deadline.isoformat() if session.sowing_deadline else "N/A"
     location_str = (
@@ -251,6 +255,7 @@ def _format_ranking_response(
                     f"  📍 {opt.distance_km:.1f} km | 📅 Start: {opt.earliest_date} ({opt.slack_days}d slack)",
                     "",
                 ]
+            lines_no_buyer.append(t("lender_payment_footer", lang))
             lines_no_buyer.append("👇 *Tap a numbered option below to book, or ask me anything!*")
             return "\n".join(lines_no_buyer)
 
@@ -290,15 +295,29 @@ def _format_ranking_response(
         )
         summary = opt.reasons[0] if opt.reasons else ""
         category = opt.category.replace("_", " ").title()
+
+        lender_line = None
+        if db:
+            m = db.get_machine(opt.target_id)
+            if m and m.provider_id:
+                p = db.get_provider(m.provider_id)
+                if p and (p.provider_type == "LENDER" or getattr(p.provider_type, "value", "") == "LENDER"):
+                    badge = "🧑‍🌾 Lender"
+                    r_str = f"⭐ {m.rating_avg:.1f} ({m.rating_count})" if (m.rating_count and m.rating_avg) else "New lender, no ratings yet"
+                    terms_part = f" | 📝 {m.terms_note}" if m.terms_note else ""
+                    lender_line = f"  {badge} • {r_str}{terms_part}"
+
         lines += [
             f"{emojis[i - 1]} *Option {i}: {category} — {opt.target_name}*",
             f"  {cost_str}",
             f"  📍 {opt.distance_km:.1f} km | 📅 Start: {opt.earliest_date} ({opt.slack_days}d slack)",
+            lender_line if lender_line else "",
             f"  ℹ️ {summary}" if summary else "",
             "",
         ]
+    lines.append(t("lender_payment_footer", lang))
     lines.append("👇 *Tap a numbered option below to book, or ask me anything!*")
-    return "\n".join(line for line in lines if line is not None)
+    return "\n".join(line for line in lines if line)
 
 
 # ── Fast path: parse + save + run engine (no LLM) ────────────────────────────
@@ -460,7 +479,7 @@ async def _run_engine_and_format(
     session.updated_at = datetime.now()
     db.put_session(session)
 
-    return _format_ranking_response(ranking, session, is_ex_situ_only=is_ex_situ_only)
+    return _format_ranking_response(ranking, session, is_ex_situ_only=is_ex_situ_only, db=db)
 
 
 # ── Strands agent construction ────────────────────────────────────────────────

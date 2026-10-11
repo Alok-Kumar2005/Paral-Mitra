@@ -39,6 +39,7 @@ class ProviderStatus(str, Enum):
 class ProviderType(str, Enum):
     CHC = "CHC"
     BUYER = "BUYER"
+    LENDER = "LENDER"  # Individual farmer / shopkeeper / machine owner
 
 
 class MachineType(str, Enum):
@@ -77,11 +78,11 @@ class OptionType(str, Enum):
 
 
 class Provider(BaseModel):
-    """A registered CHC or commercial buyer operator in the marketplace."""
+    """A registered CHC, commercial buyer, or individual lender in the marketplace."""
     model_config = ConfigDict(extra="forbid")
 
     provider_id: str = Field(..., min_length=1)
-    provider_type: ProviderType | str = Field(..., description="CHC or BUYER")
+    provider_type: ProviderType | str = Field(..., description="CHC, BUYER, or LENDER")
     name: str = Field(..., min_length=1)
     contact_phone: str = Field(..., min_length=10)
     telegram_chat_id: str | None = Field(default=None, description="Linked Telegram chat ID")
@@ -93,6 +94,7 @@ class Provider(BaseModel):
     verified_by: str | None = Field(default=None)
     verified_at: datetime | None = Field(default=None)
     is_directory_listing: bool = Field(default=False)
+    phone_verified: bool = Field(default=False, description="True when phone confirmed via Telegram contact")
     created_at: datetime = Field(default_factory=_utc_now)
 
 
@@ -125,6 +127,7 @@ class Machine(BaseModel):
     rating_count: int = Field(default=0, description="Number of ratings received")
     source: str = Field(default="MANUAL", description="Source registry (e.g. CHC_PORTAL, DIRECT, SEED)")
     is_synthetic: bool = Field(default=False, description="Flag indicating synthetic test data")
+    terms_note: str | None = Field(default=None, max_length=160, description="Optional payment/terms note (≤160 chars) for lender machines")
 
     @field_validator("blocked_dates", mode="before")
     @classmethod
@@ -217,8 +220,10 @@ class PublicMachineView(BaseModel):
     rating_avg: float | None = None
     rating_count: int = 0
     provider_name: str
+    provider_type: ProviderType | str = ProviderType.CHC
     provider_status: ProviderStatus | str
     distance_km: float | None = None
+    terms_note: str | None = None
 
 
 @dataclass
