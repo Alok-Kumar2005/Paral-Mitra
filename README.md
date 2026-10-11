@@ -62,34 +62,39 @@ Every autumn post-harvest season, millions of tonnes of paddy straw (*parali*) a
 
 ```mermaid
 flowchart TD
-    Farmer([🌾 Farmer on Telegram]) <-->|Voice & Text| TG[Telegram Bot API]
-    TG <-->|Webhook POST| APIGW[API Gateway HTTP API]
-    
-    subgraph AWS ap-south-1
-        APIGW -->|Webhook Ingress| RecLambda[Receiver Lambda\narm64]
-        APIGW -->|GET /dashboard, /api/*| ApiLambda[ApiFunction Lambda\nDashboard & Spatial API]
-        
-        RecLambda -->|Enqueue FIFO| SQS[SQS FIFO Queue\nPer-chat Message Grouping]
-        SQS -->|Batch Process| WorkerLambda[Worker Lambda\narm64]
-        
-        WorkerLambda <-->|Agent Tool Calling| Bedrock[Amazon Bedrock\nClaude 3.5 Sonnet]
-        WorkerLambda <-->|Speech-to-Text| Transcribe[Amazon Transcribe\nhi-IN, pa-IN, en-IN]
-        WorkerLambda <-->|Text-to-Speech| Polly[Amazon Polly\nNeural Voice Aditi / Kajal]
-        
-        WorkerLambda <--> S3[(S3 Bucket\nEphemeral Audio)]
-        
-        EB[EventBridge Scheduler] -->|Hourly Ingest| IngestLambda[FIRMS Ingest Lambda]
-        EB -->|Cron Sweeper| SweepLambda[Booking Sweeper Lambda]
+    Farmer(["👨‍🌾 Farmer on Telegram"]) <-->|Voice and Text| TG["Telegram Bot API"]
+    TG <-->|Webhook POST| APIGW["API Gateway HTTP API"]
+
+    subgraph AWS_ap_south_1 ["AWS ap-south-1"]
+        APIGW -->|Webhook ingress| RecLambda["Receiver Lambda<br/>arm64"]
+        APIGW -->|GET /dashboard, /api/*| ApiLambda["API Function Lambda<br/>Dashboard and Spatial API"]
+
+        RecLambda -->|Enqueue FIFO| SQS["SQS FIFO Queue<br/>Per-chat Message Grouping"]
+        SQS -->|Batch processing| WorkerLambda["Worker Lambda<br/>arm64"]
+
+        WorkerLambda <-->|Agent tool calling| Bedrock["Amazon Bedrock<br/>Claude 3.5 Sonnet"]
+        WorkerLambda <-->|Speech-to-text| Transcribe["Amazon Transcribe<br/>hi-IN, pa-IN, en-IN"]
+        WorkerLambda <-->|Text-to-speech| Polly["Amazon Polly<br/>Neural Voice Aditi / Kajal"]
+        WorkerLambda <-->|Ephemeral audio| S3[("S3 Bucket<br/>Ephemeral Audio")]
+
+        EB["EventBridge Scheduler"] -->|Hourly ingest| IngestLambda["FIRMS Ingest Lambda"]
+        EB -->|Cron sweeper| SweepLambda["Booking Sweeper Lambda"]
     end
-    
-    subgraph External Services
-        WorkerLambda <-->|Deterministic Math| Engine[Engine src/engine\nPure Python]
-        WorkerLambda <-->|Weather Forecast| OpenMeteo[Open-Meteo API\n10-Day Forecast]
-        WorkerLambda <-->|Fallback Geocoding| Nominatim[OSM Nominatim\n1 req/sec rate limit]
-        IngestLambda <-->|VIIRS NRT CSV| FIRMS[NASA FIRMS API]
-        WorkerLambda <-->|Session & Bookings| Neon[(Neon PostgreSQL\nServerless Database)]
-        ApiLambda <--> Neon
+
+    subgraph External_Services ["External Services"]
+        Engine["Deterministic Math Engine<br/>src/engine — Pure Python"]
+        Weather["Weather Forecast<br/>Open-Meteo API<br/>10-day forecast"]
+        Geo["Fallback Geocoding<br/>Nominatim / OSM<br/>1 req/sec rate limit"]
+        FIRMS["VIIRS NRT CSV<br/>NASA FIRMS API"]
+        Neon[("Neon PostgreSQL<br/>Serverless Database")]
     end
+
+    WorkerLambda <-->|Deterministic math| Engine
+    WorkerLambda <-->|Weather forecast| Weather
+    WorkerLambda <-->|Fallback geocoding| Geo
+    IngestLambda <-->|NASA FIRMS data| FIRMS
+    WorkerLambda <-->|Sessions and bookings| Neon
+    ApiLambda <-->|Database access| Neon
 ```
 
 ---
